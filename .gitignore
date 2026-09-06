@@ -1,0 +1,46 @@
+# AIpet-Murasame (old packaged client archive) - ignore rules
+# Privacy / huge dirs / build artifacts are never committed.
+
+# ----- privacy: API keys, QQ ids, face photos, login state -----
+config.json
+data/
+face_shibie/
+NapCat.Shell.Windows.OneKey/
+pets/*/memory/
+
+# ----- huge runtime resources -----
+runtime/
+GPT-SoVITS/
+F5-TTS_Models/
+models/
+reference_voices/*.wav
+reference_voices/*.mp3
+
+# ----- build artifacts / backups -----
+AIpet-Murasame.exe
+AIPetDbg.spec
+_internal/
+_internal.bak*/
+tmp/
+build/
+dist/
+*.spec
+
+# ----- venv / python cache -----
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+
+# ----- generic binary / big files -----
+*.wav
+*.mp3
+*.ckpt
+*.pth
+*.pt
+*.onnx
+*.safetensors
+*.pkl
+*.db
+*.sqlite3
+*.log
