@@ -5,6 +5,7 @@ import sys
 import math
 import socket
 import time
+import threading
 import subprocess
 import urllib.request
 
@@ -18,6 +19,7 @@ from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QStackedWidget, QApplication,
     QLabel, QGraphicsOpacityEffect, QPushButton, QOpenGLWidget, QSizePolicy
 )
+from PyQt5.QtMultimedia import QAbstractVideoSurface
 
 # ===== API 控制 URL =====
 _CONTROL_BASE = "http://localhost:28565/control"
@@ -514,6 +516,59 @@ class PortraitPreviewWidget(QLabel):
 
 # ==================== 主窗口 ====================
 
+class _VideoBackgroundSurface(QAbstractVideoSurface):
+    """视频背景帧源：请求 RGB 帧并以软件方式解码为 QImage（QLabel 逐帧刷新用）。
+
+    为什么不用 QVideoWidget：无边框+WA_TranslucentBackground 窗口叠加 DirectShow
+    视频层会触发 Qt5Multimedia.dll 栈溢出崩溃（0xC00000fd，WER 多次证实）；
+    软件解码帧完全绕开原生视频叠加层，透明/圆角/半透明都正常。"""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._lock = threading.Lock()
+        self._img = None
+
+    def supportedPixelFormats(self, handleType=None):
+        try:
+            from PyQt5.QtMultimedia import QVideoFrame, QAbstractVideoBuffer
+            if handleType is not None and handleType != QAbstractVideoBuffer.NoHandle:
+                return []
+        except Exception:
+            pass
+        return [QVideoFrame.Format_ARGB32,
+                QVideoFrame.Format_ARGB32_Premultiplied,
+                QVideoFrame.Format_RGB32,
+                QVideoFrame.Format_RGB24]
+
+    def present(self, frame):
+        try:
+            from PyQt5.QtMultimedia import QVideoFrame, QAbstractVideoBuffer
+            qf = {QVideoFrame.Format_ARGB32: QImage.Format_ARGB32,
+                  QVideoFrame.Format_ARGB32_Premultiplied: QImage.Format_ARGB32_Premultiplied,
+                  QVideoFrame.Format_RGB32: QImage.Format_RGB32,
+                  QVideoFrame.Format_RGB24: QImage.Format_RGB888}.get(frame.pixelFormat())
+            if qf is None:
+                return False
+            if not frame.map(QAbstractVideoBuffer.ReadOnly):
+                return False
+            try:
+                img = QImage(frame.bits(), frame.width(), frame.height(),
+                             frame.bytesPerLine(), qf).copy()
+            finally:
+                frame.unmap()
+            with self._lock:
+                self._img = img
+            return True
+        except Exception:
+            return False
+
+    def take_frame(self):
+        """取走最新一帧（GUI 定时器调用），无新帧返回 None"""
+        with self._lock:
+            img, self._img = self._img, None
+        return img
+
+
 class PCLMainWindow(QWidget):
     def __init__(self):
         super().__init__()
@@ -603,7 +658,8 @@ class PCLMainWindow(QWidget):
         self._bg_pixmap = None
         self._bg_player = None
         self._bg_playlist = None
-        self._bg_video = None
+        self._bg_surface = None      # 视频背景：软件解码帧（替代 QVideoWidget）
+        self._bg_video_timer = None
         try:
             kind, path, opacity = background_info()
             self._bg_kind = kind
@@ -620,29 +676,38 @@ class PCLMainWindow(QWidget):
                 self._bg_label.lower()
             elif kind == "video" and path:
                 try:
-                    from PyQt5.QtMultimedia import QMediaPlayer, QMediaPlaylist, QMediaContent
-                    from PyQt5.QtMultimediaWidgets import QVideoWidget
+                    from PyQt5.QtMultimedia import QMediaPlayer, QMediaContent
                     from PyQt5.QtCore import QUrl as _QUrl
-                    self._bg_video = QVideoWidget(self.pan_back)
-                    self._bg_video.setGeometry(0, 0, self.pan_back.width(), self.pan_back.height())
+                    # 两个 Qt5Multimedia 崩溃坑（均曾实测 0xC00000FD 栈溢出）：
+                    # 1) 无边框透明窗 + QVideoWidget 原生视频层 → 本机必崩；
+                    # 2) QMediaPlaylist 循环播放：视频播到结尾自动 Loop 重启时
+                    #    Qt5Multimedia.dll 内部递归 → 栈溢出。
+                    # 因此：软件解码帧刷 QLabel（_VideoBackgroundSurface/_tick_video_bg），
+                    # 不用播放列表，播完由 EndOfMedia 信号在 Python 侧手动重播。
+                    self._bg_label = QLabel(self.pan_back)
+                    self._bg_label.setAttribute(Qt.WA_TransparentForMouseEvents)
+                    self._bg_label.setGeometry(0, 0, self.pan_back.width(), self.pan_back.height())
                     if opacity < 1.0:
-                        _eff2 = QGraphicsOpacityEffect(self._bg_video)
+                        _eff2 = QGraphicsOpacityEffect(self._bg_label)
                         _eff2.setOpacity(opacity)
-                        self._bg_video.setGraphicsEffect(_eff2)
+                        self._bg_label.setGraphicsEffect(_eff2)
+                    self._bg_label.show()
+                    self._bg_label.lower()
                     self._bg_player = QMediaPlayer(None, QMediaPlayer.VideoSurface)
-                    self._bg_playlist = QMediaPlaylist(self._bg_player)
-                    self._bg_playlist.addMedia(QMediaContent(_QUrl.fromLocalFile(path)))
-                    self._bg_playlist.setPlaybackMode(QMediaPlaylist.Loop)
-                    self._bg_player.setPlaylist(self._bg_playlist)
-                    self._bg_player.setVideoOutput(self._bg_video)
-                    self._bg_video.show()
-                    self._bg_video.lower()
+                    self._bg_surface = _VideoBackgroundSurface(self)
+                    self._bg_player.setVideoOutput(self._bg_surface)
+                    self._bg_player.setMedia(QMediaContent(_QUrl.fromLocalFile(path)))
+                    self._bg_player.mediaStatusChanged.connect(self._on_bg_media_status)
+                    self._bg_video_timer = QTimer(self)
+                    self._bg_video_timer.setInterval(33)
+                    self._bg_video_timer.timeout.connect(self._tick_video_bg)
+                    self._bg_video_timer.start()
                     self._bg_player.play()
-                    print(f"[PCL] 视频背景播放中: {path}")
+                    print(f"[PCL] 视频背景播放中（软件帧模式）: {path}")
                 except Exception as e:
                     print(f"[PCL] 视频背景不可用（已跳过）: {e}")
                     self._bg_player = None
-                    self._bg_video = None
+                    self._bg_surface = None
                     self._bg_kind = ""
         except Exception:
             pass
@@ -652,8 +717,6 @@ class PCLMainWindow(QWidget):
         try:
             w = self.pan_back.width()
             h = self.pan_back.height()
-            if self._bg_video is not None:
-                self._bg_video.setGeometry(0, 0, w, h)
             if self._bg_label is not None:
                 self._bg_label.setGeometry(0, 0, w, h)
                 if self._bg_pixmap and not self._bg_pixmap.isNull() and w > 0 and h > 0:
@@ -664,6 +727,40 @@ class PCLMainWindow(QWidget):
                         tw, th, Qt.KeepAspectRatioByExpanding, Qt.SmoothTransformation)
                     self._bg_label.setPixmap(scaled.copy((tw - w) // 2, (th - h) // 2, w, h))
                 self._bg_label.lower()
+        except Exception:
+            pass
+
+    def _tick_video_bg(self):
+        """视频背景：从软件帧表面取最新帧 → cover 裁切 → 刷到背景 QLabel"""
+        try:
+            if self._bg_surface is None or self._bg_label is None:
+                return
+            img = self._bg_surface.take_frame()
+            if img is None or img.isNull():
+                return
+            w = self.pan_back.width()
+            h = self.pan_back.height()
+            if w <= 0 or h <= 0:
+                return
+            pw, ph = img.width(), img.height()
+            if pw <= 0 or ph <= 0:
+                return
+            sc = max(w / pw, h / ph)
+            tw, th = int(pw * sc + 0.5), int(ph * sc + 0.5)
+            pm = QPixmap.fromImage(img).scaled(
+                tw, th, Qt.KeepAspectRatioByExpanding, Qt.SmoothTransformation)
+            self._bg_label.setPixmap(pm.copy((tw - w) // 2, (th - h) // 2, w, h))
+        except Exception:
+            pass
+
+    def _on_bg_media_status(self, status):
+        """视频背景播完手动重播（不用播放列表 Loop，规避 Qt5Multimedia 递归栈溢出）"""
+        try:
+            from PyQt5.QtMultimedia import QMediaPlayer
+            if status == QMediaPlayer.EndOfMedia and self._bg_player is not None:
+                self._bg_player.stop()
+                self._bg_player.setPosition(0)
+                self._bg_player.play()
         except Exception:
             pass
 

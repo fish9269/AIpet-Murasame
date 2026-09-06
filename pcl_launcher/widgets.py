@@ -79,8 +79,8 @@ class PCLTitleBar(QWidget):
             _pix = QPixmap(_art)
             btn.setIcon(QIcon(_art))
             if not _pix.isNull():
-                _h = int(26 * S)
-                _w = max(int(20 * S), int(_pix.width() * _h / max(1, _pix.height())))
+                _h = int(34 * S)
+                _w = max(int(24 * S), int(_pix.width() * _h / max(1, _pix.height())))
                 btn.setIconSize(QSize(_w, _h))
             btn.setToolTip(text)
             btn.setStyleSheet(nav_img_btn_qss())
