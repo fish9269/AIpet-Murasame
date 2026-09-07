@@ -111,6 +111,22 @@ _PRIVATE_MAX_LEN = 30  # 兜底强制切
 _PRIVATE_SEND_INTERVAL = (0.6, 1.2)
 
 
+def cap_clauses_count(clauses, max_msgs):
+    """单次回复最多发送条数（0=不限）：
+
+    切句后条数超过 max_msgs 时，前 max_msgs-1 条原样逐条发送，
+    其余句子全部合并进最后一条一起发——内容不丢失，且一次回复
+    发出的消息条数不会超过配置的「每次对话最多回复次数」，
+    避免"一次回复被拆成 5 句 = 用户看到回了好几次"。"""
+    try:
+        m = int(max_msgs or 0)
+    except Exception:
+        m = 0
+    if m <= 0 or not clauses or len(clauses) <= m:
+        return clauses
+    return clauses[:m - 1] + ["".join(clauses[m - 1:])]
+
+
 def split_private_reply(reply: str):
     """
     将 AI 完整回复按强断句符切分为多条短消息。
@@ -1136,8 +1152,16 @@ class QQBotBridge:
     def _send_private_reply(self, reply, stickers, user_id):
         """私聊回复：按标点切句逐条发送 + 可选表情包(0~2个)/语音。
         返回 True = 文字部分完整发送成功（分句全部送达）；
-        False = 断线/失败（调用方不应标记为已回复，避免重连补拉漏回）。"""
+        False = 断线/失败（调用方不应标记为已回复，避免重连补拉漏回）。
+        对话调节：一次回复切句后若超过「每次对话最多回复次数」，
+        自动把多余句子合并进最后一条（内容不丢，消息条数不超上限）。"""
         clauses = split_private_reply(reply)
+        if not clauses:
+            return True
+        try:
+            clauses = cap_clauses_count(clauses, self._reply_limits()[0])
+        except Exception:
+            pass
         if not clauses:
             return True
 
