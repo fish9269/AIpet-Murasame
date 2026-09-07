@@ -544,6 +544,19 @@ class PCLSettingsPanel(QScrollArea):
         self._add_spin("qq_max_replies_per_conversation",
                        "每次对话最多回复次数（0=不限）", 0, 30, 0)
 
+        # ===== NapCat 自动登录（QQ号 + 密码直登，免手机扫码）=====
+        auto_lbl = QLabel("  🔓 NapCat 自动登录（免扫码）")
+        auto_lbl.setFont(QFont("Microsoft YaHei", int(12 * S), QFont.Bold))
+        auto_lbl.setStyleSheet(f"color: {Color1.name()}; margin-top: {int(14*S)}px;")
+        self._cur_layout.addWidget(auto_lbl)
+        self._add_slider("qq_auto_login_enable", "自动登录开关", ["false", "true"], "false",
+                         hint="开启后，启动 NapCat 时用下方 QQ号+密码 自动登录，无需手机扫码；"
+                              "首次使用或触发设备验证时仍可能需要在控制台处理验证")
+        self._add_text_input("qq_login_uin", "登录 QQ 号", "",
+                             placeholder="如：123456789")
+        self._add_text_input("qq_login_password", "QQ 密码", "", secure=True,
+                             placeholder="仅保存在本地 config.json，启动时以 MD5 传给 NapCat")
+
         self._add_slider("qq_enabled", "QQ 功能总开关", ["false", "true"], "false")
         self._add_slider("qq_send_sticker", "QQ 表情包", ["false", "true"], "true")
         self._add_slider("qq_send_voice", "QQ 语音消息 (F5-TTS)", ["false", "true"], "false")
@@ -680,13 +693,15 @@ class PCLSettingsPanel(QScrollArea):
         self._cur_layout.addWidget(lbl)
         return lbl
 
-    def _add_text_input(self, key, label, default="", placeholder=""):
+    def _add_text_input(self, key, label, default="", placeholder="", secure=False):
         lbl = QLabel(f"  {label}")
         lbl.setStyleSheet(f"color: {Gray2.name()}; font-size: {int(12*S)}px;")
         self._cur_layout.addWidget(lbl)
         inp = QLineEdit()
         inp.setText(str(default))
         inp.setPlaceholderText(placeholder)
+        if secure:
+            inp.setEchoMode(QLineEdit.Password)
         inp.setStyleSheet(f"""
             QLineEdit {{ border: 1px solid {Gray5.name()}; padding: {int(6*S)}px;
                 font-size: {int(12*S)}px; border-radius: {int(4*S)}px;

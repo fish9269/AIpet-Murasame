@@ -1401,6 +1401,32 @@ class PCLMainWindow(QWidget):
                 border-radius: {int(14*S)}px; }}
         """)
 
+    def _apply_napcat_login_env(self):
+        """NapCat 自动登录：读取 设置→QQ配置→自动登录 三项，
+        注入 NAPCAT_QUICK_ACCOUNT / NAPCAT_QUICK_PASSWORD_MD5 环境变量，
+        由 NapCat 启动时直接账号密码登录（免手机扫码）。"""
+        try:
+            import hashlib as _hl
+            cfg = self._load_config()
+            for _k in ("NAPCAT_QUICK_ACCOUNT", "NAPCAT_QUICK_PASSWORD",
+                       "NAPCAT_QUICK_PASSWORD_MD5"):
+                os.environ.pop(_k, None)
+            if str(cfg.get("qq_auto_login_enable", "false")).lower() != "true":
+                return
+            uin = str(cfg.get("qq_login_uin", "") or "").strip()
+            pwd = str(cfg.get("qq_login_password", "") or "")
+            if not uin:
+                return
+            os.environ["NAPCAT_QUICK_ACCOUNT"] = uin
+            if pwd:
+                os.environ["NAPCAT_QUICK_PASSWORD_MD5"] = _hl.md5(
+                    pwd.encode("utf-8")).hexdigest()
+                print(f"[PCL] NapCat 自动登录已注入：账号 {uin}（密码 MD5 形式）")
+            else:
+                print(f"[PCL] NapCat 快速登录已注入：账号 {uin}（未填密码 → 走本地缓存快速登录）")
+        except Exception as e:
+            print(f"[PCL] ⚠ 注入自动登录环境变量失败: {e}")
+
     def _ensure_napcat_async(self, timeout_sec=45):
         """
         异步确保 NapCat 已运行（不阻塞 UI）：
@@ -1422,6 +1448,9 @@ class PCLMainWindow(QWidget):
 
         # 情况 2：启动 NapCat
         base = _app_base_dir()
+
+        # 自动登录：开启后注入 NAPCAT_QUICK_ACCOUNT / 密码 MD5 环境变量（免手机扫码）
+        self._apply_napcat_login_env()
 
         napcat_bat = os.path.join(base, "NapCat.Shell.Windows.OneKey", "start_napcat.bat")
         if not os.path.exists(napcat_bat):
