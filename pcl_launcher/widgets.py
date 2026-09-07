@@ -77,9 +77,14 @@ class PCLTitleBar(QWidget):
             _pix = QPixmap(_art)
             btn = _NavOutlineButton(text, _pix)
             if not _pix.isNull():
-                _h = int(34 * S)
-                _w = max(int(24 * S), int(_pix.width() * _h / max(1, _pix.height())))
-                btn._content._pix = _pix.scaled(_w, _h, Qt.KeepAspectRatio,
+                # 图标等比缩放：高度 34，但超宽素材限宽 56，防止把整行撑爆裁字
+                _h0 = int(34 * S)
+                _w0 = int(_pix.width() * _h0 / max(1, _pix.height()))
+                _wmax = int(56 * S)
+                if _w0 > _wmax:
+                    _w0 = _wmax
+                    _h0 = max(int(18 * S), int(_w0 * _pix.height() / max(1, _pix.width())))
+                btn._content._pix = _pix.scaled(_w0, _h0, Qt.KeepAspectRatio,
                                                 Qt.SmoothTransformation)
             btn.fit_to_content()
             btn.setToolTip(text)
@@ -277,10 +282,18 @@ class _NavOutlineButton(QPushButton):
         self._content.raise_()
 
     def fit_to_content(self):
-        """按 图标+间距+文字 设置最小宽度（按钮随文字长度自适应）"""
+        """按 图标+间距+文字 设置最小宽高（按钮随文字/图标长度与高度自适应，
+        保证文字与图标完整显示）"""
         try:
-            need = int(self._content.content_width() + 2 * self._pad)
-            self.setMinimumWidth(max(need, self.minimumWidth()))
+            c = self._content
+            from PyQt5.QtGui import QFontMetrics
+            fm = QFontMetrics(c.font())
+            iw = c._pix.width() if c._pix is not None else 0
+            ih = c._pix.height() if c._pix is not None else 0
+            need_w = int(iw + (c._gap if iw else 0) + c._tw + 2 * self._pad)
+            self.setMinimumWidth(max(need_w, self.minimumWidth()))
+            need_h = int(max(ih, fm.height()) + 8)
+            self.setMinimumHeight(max(need_h, self.minimumHeight()))
         except Exception:
             pass
 
