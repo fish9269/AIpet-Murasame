@@ -1704,7 +1704,8 @@ class PCLPetManager(QScrollArea):
 
         container = QWidget()
         self._layout = QVBoxLayout(container)
-        self._layout.setContentsMargins(int(30 * S), int(30 * S), int(30 * S), int(30 * S))
+        # 桌宠页：左右贴边与目录条同宽
+        self._layout.setContentsMargins(0, int(20 * S), 0, int(20 * S))
         self._layout.setSpacing(int(12 * S))
         self.setWidget(container)
 

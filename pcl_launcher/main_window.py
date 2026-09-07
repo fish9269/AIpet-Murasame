@@ -720,6 +720,10 @@ class PCLMainWindow(QWidget):
         self._wechat_pet_id = None
 
         self._setup_window()
+        # 全窗底色层：无壁纸主题时铺满整窗（= 与目录条同宽），壁纸/视频主题会被盖住
+        self._round_back = _RoundBackWidget(self)
+        self._round_back.setGeometry(0, 0, self.width(), self.height())
+        self._round_back.show()
         self.pan_back = QWidget(self)
         self.pan_back.setGeometry(0, 0, self.width(), self.height())
         self._build_ui()
@@ -781,6 +785,10 @@ class PCLMainWindow(QWidget):
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
+        try:
+            self._round_back.setGeometry(0, 0, self.width(), self.height())
+        except Exception:
+            pass
         self._apply_round_mask()
 
     def _apply_round_mask(self):
@@ -1678,7 +1686,14 @@ class PCLMainWindow(QWidget):
         self._fade_page_out(lambda: self._do_switch(index))
 
     def _do_switch(self, index):
-        self.stack.setCurrentIndex(index); self._fade_page_in()
+        self.stack.setCurrentIndex(index)
+        # 仅「模型」页保留左侧模型列表；其余页面隐藏列表 →
+        # 页面占满全宽，与顶部目录条同宽（桌宠/提示词等不再短一截）
+        try:
+            self.sidebar.setVisible(index == 0)
+        except Exception:
+            pass
+        self._fade_page_in()
 
     def _fade_page_out(self, callback):
         self._animating = True
