@@ -206,8 +206,9 @@ class PCLSidebar(QWidget):
         self.scroll.setFrameShape(QScrollArea.NoFrame)
         self.scroll.setStyleSheet("QScrollArea { background: transparent; border: none; }")
         self.btn_container = QWidget()
-        # 侧栏底：白色（曾为透出主题壁纸改成透明，用户反馈要白色底）
-        self.setStyleSheet("background: #FFFFFF; border: none;")
+        # 侧栏透明：直接露出主题背景/视频（白色大块会遮挡背景）
+        self.setStyleSheet("background: transparent; border: none;")
+        self.btn_container.setAttribute(Qt.WA_TranslucentBackground, True)
         self.btn_layout = QVBoxLayout(self.btn_container)
         self.btn_layout.setContentsMargins(0, 0, 0, 0)
         self.btn_layout.setSpacing(int(2 * S))

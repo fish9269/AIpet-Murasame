@@ -298,14 +298,15 @@ class Live2DPreviewWidget(QOpenGLWidget):
                                    GL_ARRAY_BUFFER, GL_TEXTURE0, GL_TEXTURE_2D,
                                    GL_TRIANGLE_STRIP, GL_FLOAT, GL_BLEND, GL_DEPTH_TEST)
             import array
-            # 保持原始宽高比完整显示（fit）：画面按原比例居中，四周留边、不拉伸
+            # cover 中心裁切填满：保持宽高比放大到铺满整个区域，
+            # 画面四周超出的部分自然裁掉，无空白、不变形
             iw, ih = self._bg_tex_size
             w, h = max(1, self.width()), max(1, self.height())
             u0, u1, v0, v1 = 0.0, 1.0, 0.0, 1.0
             if iw > 0 and ih > 0:
-                s = min(w / iw, h / ih)
-                hx = max(0.001, (iw * s) / w)
-                hy = max(0.001, (ih * s) / h)
+                s = max(w / iw, h / ih)
+                hx = (iw * s) / w
+                hy = (ih * s) / h
             else:
                 hx = hy = 1.0
             verts = array.array("f", [
@@ -355,10 +356,10 @@ class Live2DPreviewWidget(QOpenGLWidget):
                                    GL_DEPTH_TEST)
             iw, ih = self._bg_tex_size
             w, h = max(1, self.width()), max(1, self.height())
-            # 保持原始宽高比完整显示（fit）：居中留边，不拉伸
+            # cover 中心裁切填满：等比放大到铺满，无空白不变形（超出的部分被裁掉）
             u0, v0, u1, v1 = 0.0, 0.0, 1.0, 1.0
             if iw > 0 and ih > 0:
-                s = min(w / iw, h / ih)
+                s = max(w / iw, h / ih)
                 dw, dh = iw * s, ih * s
             else:
                 dw, dh = w, h
