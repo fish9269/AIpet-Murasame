@@ -534,6 +534,16 @@ class PCLSettingsPanel(QScrollArea):
         self._add_text_input("qq_owner_id", "主主人 QQ 号（共享记忆）", "", placeholder="如：123456789（白名单第一位）")
         self._add_text_input("qq_master_ids_text", "额外主人白名单 QQ 号", "",
                              placeholder="逗号分隔，最多 4 个，如：111111,222222")
+
+        # ===== 对话调节 =====
+        cap_lbl = QLabel("  📐 对话调节")
+        cap_lbl.setFont(QFont("Microsoft YaHei", int(12 * S), QFont.Bold))
+        cap_lbl.setStyleSheet(f"color: {Color1.name()}; margin-top: {int(14*S)}px;")
+        self._cur_layout.addWidget(cap_lbl)
+        self._add_spin("qq_max_reply_chars", "单次回复最多字数（0=不限）", 0, 2000, 0)
+        self._add_spin("qq_max_replies_per_conversation",
+                       "每次对话最多回复次数（0=不限）", 0, 30, 0)
+
         self._add_slider("qq_enabled", "QQ 功能总开关", ["false", "true"], "false")
         self._add_slider("qq_send_sticker", "QQ 表情包", ["false", "true"], "true")
         self._add_slider("qq_send_voice", "QQ 语音消息 (F5-TTS)", ["false", "true"], "false")

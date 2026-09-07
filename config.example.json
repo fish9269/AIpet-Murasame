@@ -61,5 +61,7 @@
   "wechat_bot_agent": "AIpet/1.15",
   "wechat_send_voice": "false",
   "ui_theme": "classic",
-  "ui_accent": "blue"
+  "ui_accent": "blue",
+  "qq_max_reply_chars": 0,
+  "qq_max_replies_per_conversation": 0
 }

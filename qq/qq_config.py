@@ -104,6 +104,10 @@ def get_qq_config():
         "lively_enabled": str(cfg.get("qq_lively_enable", "false")).lower() == "true",
         # 接话间隔最低 1 分钟（UI 调节范围 1~120）；非法值兜底 15
         "lively_interval": _cfg_int_min(cfg.get("qq_lively_interval", 15), 15, 1),
+        # 对话调节：单次回复字数上限（0=不限；非法值兜底 0）
+        "max_reply_chars": _cfg_int_min(cfg.get("qq_max_reply_chars", 0), 0, 0),
+        # 对话调节：每次对话最多回复次数（0=不限；10 分钟无回复自动重置）
+        "max_replies_per_conversation": _cfg_int_min(cfg.get("qq_max_replies_per_conversation", 0), 0, 0),
         # 主人白名单（最多 5 个 QQ 号；第一位 = 主主人，负责共享记忆/离线补拉）
         "master_ids": _parse_master_ids(cfg),
         # 主主人（owner 兼容键，供离线补拉/共享记忆等"主号"逻辑使用）

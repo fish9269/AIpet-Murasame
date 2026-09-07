@@ -222,6 +222,10 @@ class QQBotBridge:
         self._group_buf = {}               # group_id -> {last_others, last_bot_talk, recent[]}
         self._lively_last_global = 0.0     # 全局最近一次活泼发言时间（防刷屏）
 
+        # ===== 对话调节（设置 → QQ配置）=====
+        self._convo = {}       # session_key -> [已回复次数, 上次回复时间]
+        self._seen_msg = {}    # message_id -> 到达时间（活消息去重，防重复回复）
+
         # ===== 群名缓存（get_group_info 异步查询，供身份标识使用）=====
         self._group_names_lock = threading.Lock()
         self._group_names = {}             # str(group_id) -> group_name
@@ -326,6 +330,65 @@ class QQBotBridge:
         """记录一次有效活动（收到主人消息/正常对话）——空闲计时据此重置"""
         with self._activity_lock:
             self._last_activity = time.time()
+
+    # ================= 对话调节（设置 → QQ配置） =================
+    def _cap_reply(self, reply):
+        """单次回复字数上限（qq_max_reply_chars；0=不限）"""
+        try:
+            m = int(self.cfg.get("max_reply_chars") or 0)
+        except Exception:
+            m = 0
+        if m > 0 and reply and len(reply) > m:
+            reply = reply[:m]
+        return reply
+
+    def _convo_allowed(self, session_key) -> bool:
+        """每次对话最多回复次数（qq_max_replies_per_conversation；0=不限）。
+
+        同一会话内 10 分钟为一段对话：bot 每成功回复一次计数 +1，
+        达到上限后该对话保持沉默（不再回复），直到 10 分钟无回复自动重置。"""
+        try:
+            m = int(self.cfg.get("max_replies_per_conversation") or 0)
+        except Exception:
+            m = 0
+        if m <= 0:
+            return True
+        now = time.time()
+        cnt, last = self._convo.get(session_key, (0, 0.0))
+        if now - last > 600:
+            cnt = 0
+        if cnt >= m:
+            return False
+        return True
+
+    def _convo_note(self, session_key):
+        """一次回复发送成功后计数（用于回复次数上限）"""
+        try:
+            m = int(self.cfg.get("max_replies_per_conversation") or 0)
+        except Exception:
+            m = 0
+        if m <= 0:
+            return
+        now = time.time()
+        cnt, last = self._convo.get(session_key, (0, 0.0))
+        if now - last > 600:
+            cnt = 0
+        self._convo[session_key] = (cnt + 1, now)
+
+    def _dedupe_msg(self, message_id) -> bool:
+        """活消息去重：NapCat 偶发同一条消息上报两次（或与补拉撞车）。
+        返回 True = 该 message_id 近期已见过（应跳过，防止重复回复）。"""
+        if message_id is None:
+            return False
+        now = time.time()
+        prev = self._seen_msg.get(message_id)
+        if prev is not None and now - prev < 120:
+            return True
+        self._seen_msg[message_id] = now
+        if len(self._seen_msg) > 1000:
+            for k in [k for k, v in self._seen_msg.items() if now - v > 300]:
+                self._seen_msg.pop(k, None)
+        return False
 
     def _set_qq_online_status(self, status) -> bool:
         """把 QQ 在线状态设为 status（10=在线 30=离开 40=隐身 60=Q我吧 等）。
@@ -689,6 +752,11 @@ class QQBotBridge:
         if user_id == self.self_id:
             return
 
+        # 活消息去重：同一条 message_id 短时间内重复上报 → 跳过（防重复回复同一问题）
+        if self._dedupe_msg(message_id):
+            print(f"[QQBridge] 忽略重复上报 message_id={message_id}（{nickname}）")
+            return
+
         # ===== 空闲自动离线：离线期间只被「主人私聊 / 主人在群里点名 @」唤醒 =====
         if self._offline_mode:
             if message_type == "private":
@@ -757,6 +825,16 @@ class QQBotBridge:
             if not clean.strip():
                 return
             self._touch_activity()  # 被点名 → 有效对话，重置空闲计时
+            # 立即占用该群活泼冷却位：被 @ 的话题即将由正常回复回答，
+            # 防止活泼模式在回复前把同一话题又插嘴一次（重复回复同一问题）
+            if cfg.get("lively_enabled") and cfg.get("allow_groups"):
+                try:
+                    with self._groups_lock:
+                        _buf = self._group_buf.get(str(group_id))
+                        if _buf:
+                            _buf["last_bot_talk"] = time.time()
+                except Exception:
+                    pass
             print(f"[QQBridge] 群聊 {nickname}({user_id}) @丛雨: {clean[:40]}")
             # 入调度队列（session_key = group_<群号>_u<QQ号>：按人分仓记忆，
             # 跟谁聊就只带谁的上下文，防止群里不同人的对话互相串味/认错人）
@@ -887,11 +965,17 @@ class QQBotBridge:
                 )
                 if not reply:
                     return
+                # 对话调节：字数上限 + 每次对话回复次数上限
+                if not self._convo_allowed(session_key):
+                    print(f"[QQBridge] 私聊{user_id} 本轮对话已达回复次数上限，保持沉默")
+                    return
+                reply = self._cap_reply(reply)
                 sent_ok = self._send_private_reply(reply, stickers, user_id)
                 # 仅整条回复发送成功后，才把本组全部 message_id 记为已处理：
                 # - 发送失败若标记 → 重连补拉不再回答（漏回）
                 # - 只记 first 而漏掉合并的第 2/3 条 → 重连补拉对它们重复回答（重复回）
                 if sent_ok:
+                    self._convo_note(session_key)
                     self._mark_replied_msgs(msg)
             elif session_key.startswith("group_"):
                 user_id = msg["user_id"]
@@ -905,8 +989,14 @@ class QQBotBridge:
                 )
                 if not reply:
                     return
+                # 对话调节：字数上限 + 每次对话回复次数上限
+                if not self._convo_allowed(session_key):
+                    print(f"[QQBridge] 群{group_id} 本轮对话已达回复次数上限，保持沉默")
+                    return
+                reply = self._cap_reply(reply)
                 sent_ok = self._send_group_reply(reply, stickers, user_id, group_id)
                 if sent_ok:
+                    self._convo_note(session_key)
                     self._mark_replied_msgs(msg)
                     # 已回应过当前话题 → 清空该群活泼话题缓冲并记冷却，
                     # 防止活泼模式对同一句话再插嘴一次（用户反馈"一句话被回两次"）
