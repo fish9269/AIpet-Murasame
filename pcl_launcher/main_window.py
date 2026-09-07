@@ -746,10 +746,11 @@ class PCLMainWindow(QWidget):
         self._apply_round_mask()
 
     def _apply_round_mask(self):
-        """启动器窗口全局圆角（与主题无关）：按窗口尺寸生成圆角遮罩，
-        四角透明由 WA_TranslucentBackground 呈现为桌面圆角效果"""
+        """启动器窗口全局圆角（与主题无关）：按窗口尺寸生成圆角遮罩。
+        注意：WA_TranslucentBackground 在 Windows 上是分层窗口，会忽略 setMask，
+        因此圆角由遮罩实现（四角以外区域不绘制，露出桌面）。"""
         try:
-            r = int(18 * S)
+            r = int(16 * S)
             path = QPainterPath()
             path.addRoundedRect(QRectF(self.rect()), r, r)
             poly = path.toFillPolygon().toPolygon()
@@ -760,7 +761,9 @@ class PCLMainWindow(QWidget):
     def _setup_window(self):
         # 不再置顶：PCL 是普通窗口，可通过任务栏正常最小化（用户反馈）
         self.setWindowFlags(Qt.FramelessWindowHint)
-        self.setAttribute(Qt.WA_TranslucentBackground)
+        # 不能用 WA_TranslucentBackground（分层窗口忽略 setMask → 圆角失效）；
+        # 圆角交给 _apply_round_mask 的遮罩实现，半透明子控件不受影响。
+        self.setStyleSheet(f"background: {Color8.name()};")
         w, h = int(1200 * S), int(900 * S)
         self.setMinimumSize(int(950 * S), int(700 * S))
         self.resize(w, h)
