@@ -7,7 +7,7 @@ import sys
 import urllib.request
 
 from PyQt5.QtCore import Qt, pyqtSignal, QSize
-from PyQt5.QtGui import QPainter, QColor, QLinearGradient, QPainterPath, QFont, QIcon, QPixmap
+from PyQt5.QtGui import (QPainter, QColor, QLinearGradient, QPainterPath, QFont, QIcon, QPixmap, QPen)
 from PyQt5.QtWidgets import (
     QWidget, QLabel, QPushButton, QVBoxLayout, QHBoxLayout, QSpinBox, QScrollArea,
     QLineEdit, QSlider, QDoubleSpinBox, QComboBox, QTextEdit,
@@ -182,6 +182,32 @@ class PCLTitleBar(QWidget):
 
 # ==================== 侧栏 ====================
 
+class _OutlineTextLabel(QLabel):
+    """带白色描边的标题文字（透明背景/视频底上保证可读）"""
+
+    def __init__(self, text, parent=None, outline="#ffffff", width=2.6, fill=None):
+        super().__init__(text, parent)
+        self._outline = QColor(outline)
+        self._ow = max(1.0, width)
+        self._fill = QColor(fill) if fill is not None else QColor("#343d4a")
+
+    def paintEvent(self, event):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing, True)
+        f = self.font()
+        p.setFont(f)
+        fm = p.fontMetrics()
+        x = 0
+        y = (self.height() - fm.height()) // 2 + fm.ascent()
+        path = QPainterPath()
+        path.addText(x, y, f, self.text())
+        pen = QPen(self._outline, self._ow)
+        pen.setJoinStyle(Qt.RoundJoin)
+        p.strokePath(path, pen)
+        p.fillPath(path, self._fill)
+        p.end()
+
+
 class PCLSidebar(QWidget):
     model_selected = pyqtSignal(str, str, str)  # (pet_id, name, model_path)
 
@@ -195,9 +221,8 @@ class PCLSidebar(QWidget):
         layout.setSpacing(int(4 * S))
 
         header = QHBoxLayout()
-        title = QLabel("模型列表")
+        title = _OutlineTextLabel("模型列表", fill=Color1)
         title.setFont(QFont("Microsoft YaHei", int(12 * S), QFont.Bold))
-        title.setStyleSheet(f"color: {Color1.name()};")
         header.addWidget(title); header.addStretch()
         layout.addLayout(header); layout.addSpacing(int(8 * S))
 
