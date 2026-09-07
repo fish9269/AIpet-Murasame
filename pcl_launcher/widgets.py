@@ -557,6 +557,13 @@ class PCLSettingsPanel(QScrollArea):
         self._add_text_input("qq_login_password", "QQ 密码", "", secure=True,
                              placeholder="仅保存在本地 config.json，启动时以 MD5 传给 NapCat")
 
+        # 对话调节 + 自动登录 这几项改动即写盘（不依赖「保存」按钮，方便直接生效）
+        self._wire_autosave("spin", "qq_max_reply_chars")
+        self._wire_autosave("spin", "qq_max_replies_per_conversation")
+        self._wire_autosave("slider", "qq_auto_login_enable")
+        self._wire_autosave("text", "qq_login_uin")
+        self._wire_autosave("text", "qq_login_password")
+
         self._add_slider("qq_enabled", "QQ 功能总开关", ["false", "true"], "false")
         self._add_slider("qq_send_sticker", "QQ 表情包", ["false", "true"], "true")
         self._add_slider("qq_send_voice", "QQ 语音消息 (F5-TTS)", ["false", "true"], "false")
@@ -680,6 +687,40 @@ class PCLSettingsPanel(QScrollArea):
         f = getattr(self, "_cat_filter", "all")
         for box, cats in getattr(self, "_cat_entries", []):
             box.setVisible(f in cats)
+
+    def _auto_persist(self, key, value):
+        """单项即时写盘（对话调节/自动登录等不需要点保存）"""
+        try:
+            p = self._config_path_resolve()
+            cfg = {}
+            if os.path.isfile(p):
+                with open(p, "r", encoding="utf-8") as f:
+                    cfg = json.load(f)
+            cfg[key] = value
+            tmp = p + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(cfg, f, ensure_ascii=False, indent=2)
+            os.replace(tmp, p)
+        except Exception as e:
+            print(f"[PCL] 自动保存失败 {key}: {e}")
+
+    def _wire_autosave(self, kind, key):
+        """把控件改动即时绑定到写盘（spin/slider/text）"""
+        try:
+            w = self._widgets.get(key)
+            if w is None:
+                return
+            if kind == "spin":
+                w.valueChanged.connect(lambda v, k=key: self._auto_persist(k, int(v)))
+            elif kind == "slider":
+                slider, options, _lbl = w
+                slider.valueChanged.connect(
+                    lambda v, o=options, k=key: self._auto_persist(k, o[v]))
+            else:
+                w.editingFinished.connect(
+                    lambda k=key: self._auto_persist(k, w.text().strip()))
+        except Exception as e:
+            print(f"[PCL] 自动保存绑定失败 {key}: {e}")
 
     def _section(self, text, icon="🎯"):
         """设置页分区标题（左侧主题色条 + 半透明底，视觉上把功能归类）"""
