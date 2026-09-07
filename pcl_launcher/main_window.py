@@ -746,24 +746,34 @@ class PCLMainWindow(QWidget):
         self._apply_round_mask()
 
     def _apply_round_mask(self):
-        """启动器窗口全局圆角（与主题无关）：按窗口尺寸生成圆角遮罩。
-        注意：WA_TranslucentBackground 在 Windows 上是分层窗口，会忽略 setMask，
-        因此圆角由遮罩实现（四角以外区域不绘制，露出桌面）。"""
+        """全局圆角（与主题无关）：透明窗口下不用 setMask（分层窗口会忽略），
+        改为父窗口 paintEvent 里绘制圆角底色实现；本方法仅保留给 resize 触发重绘。"""
         try:
+            self.update()
+        except Exception:
+            pass
+
+    def paintEvent(self, event):
+        """父窗口绘制圆角底色：四角外保持透明（露出桌面），
+        内部主题色底/壁纸/视频叠在其上，形成与主题无关的全局圆角窗口"""
+        try:
+            super().paintEvent(event)
+            p = QPainter(self)
+            p.setRenderHint(QPainter.Antialiasing, True)
             r = int(16 * S)
             path = QPainterPath()
             path.addRoundedRect(QRectF(self.rect()), r, r)
-            poly = path.toFillPolygon().toPolygon()
-            self.setMask(QRegion(poly))
+            p.fillPath(path, QColor(Color8))
+            p.end()
         except Exception:
             pass
 
     def _setup_window(self):
         # 不再置顶：PCL 是普通窗口，可通过任务栏正常最小化（用户反馈）
         self.setWindowFlags(Qt.FramelessWindowHint)
-        # 不能用 WA_TranslucentBackground（分层窗口忽略 setMask → 圆角失效）；
-        # 圆角交给 _apply_round_mask 的遮罩实现，半透明子控件不受影响。
-        self.setStyleSheet(f"background: {Color8.name()};")
+        # 保持透明窗口：背景壁纸/视频/半透明控件全部依赖它正常叠层；
+        # 圆角由 paintEvent 绘制圆角底色 + 四角透明实现（主题无关）
+        self.setAttribute(Qt.WA_TranslucentBackground)
         w, h = int(1200 * S), int(900 * S)
         self.setMinimumSize(int(950 * S), int(700 * S))
         self.resize(w, h)
