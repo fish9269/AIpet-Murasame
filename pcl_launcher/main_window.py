@@ -298,13 +298,21 @@ class Live2DPreviewWidget(QOpenGLWidget):
                                    GL_ARRAY_BUFFER, GL_TEXTURE0, GL_TEXTURE_2D,
                                    GL_TRIANGLE_STRIP, GL_FLOAT, GL_BLEND, GL_DEPTH_TEST)
             import array
-            # 整图拉伸填满：UV 恒为全图 0..1（用户要求直接拉伸看到整张背景图）
+            # 保持原始宽高比完整显示（fit）：画面按原比例居中，四周留边、不拉伸
+            iw, ih = self._bg_tex_size
+            w, h = max(1, self.width()), max(1, self.height())
             u0, u1, v0, v1 = 0.0, 1.0, 0.0, 1.0
+            if iw > 0 and ih > 0:
+                s = min(w / iw, h / ih)
+                hx = max(0.001, (iw * s) / w)
+                hy = max(0.001, (ih * s) / h)
+            else:
+                hx = hy = 1.0
             verts = array.array("f", [
-                -1.0, -1.0, u0, v0,
-                 1.0, -1.0, u1, v0,
-                -1.0,  1.0, u0, v1,
-                 1.0,  1.0, u1, v1,
+                -hx, -hy, u0, v0,
+                 hx, -hy, u1, v0,
+                -hx,  hy, u0, v1,
+                 hx,  hy, u1, v1,
             ])
             glUseProgram(self._bg_prog)
             glBindVertexArray(self._bg_vao)
@@ -347,8 +355,15 @@ class Live2DPreviewWidget(QOpenGLWidget):
                                    GL_DEPTH_TEST)
             iw, ih = self._bg_tex_size
             w, h = max(1, self.width()), max(1, self.height())
-            # 整图拉伸填满预览区（不再做 cover 裁剪）
+            # 保持原始宽高比完整显示（fit）：居中留边，不拉伸
             u0, v0, u1, v1 = 0.0, 0.0, 1.0, 1.0
+            if iw > 0 and ih > 0:
+                s = min(w / iw, h / ih)
+                dw, dh = iw * s, ih * s
+            else:
+                dw, dh = w, h
+            x0 = (w - dw) / 2.0
+            y0 = (h - dh) / 2.0
             glPushMatrix()
             glMatrixMode(GL_PROJECTION)
             glPushMatrix()
@@ -362,10 +377,10 @@ class Live2DPreviewWidget(QOpenGLWidget):
             glBindTexture(GL_TEXTURE_2D, self._bg_tex)
             glColor4f(1, 1, 1, 1)
             glBegin(GL_QUADS)
-            glTexCoord2f(u0, v0); glVertex2f(0, 0)
-            glTexCoord2f(u1, v0); glVertex2f(w, 0)
-            glTexCoord2f(u1, v1); glVertex2f(w, h)
-            glTexCoord2f(u0, v1); glVertex2f(0, h)
+            glTexCoord2f(u0, v0); glVertex2f(x0, y0)
+            glTexCoord2f(u1, v0); glVertex2f(x0 + dw, y0)
+            glTexCoord2f(u1, v1); glVertex2f(x0 + dw, y0 + dh)
+            glTexCoord2f(u0, v1); glVertex2f(x0, y0 + dh)
             glEnd()
             glDisable(GL_TEXTURE_2D)
             glPopMatrix()
@@ -379,7 +394,7 @@ class Live2DPreviewWidget(QOpenGLWidget):
             return False
 
     def _draw_bg_quad(self):
-        """把壁纸纹理整图拉伸画满预览区：优先着色器，GLSL<1.5 回退 legacy"""
+        """把背景（图片/视频帧）按原比例 fit 画在预览区中央：优先着色器，GLSL<1.5 回退 legacy"""
         if not self._bg_tex_ok or not self._bg_tex:
             return False
         if getattr(self, "_use_shader", False):
