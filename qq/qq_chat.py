@@ -413,21 +413,36 @@ def chat_once(user_text: str, use_sticker: bool = True, vision_desc: str = None,
     except Exception:
         pass
 
+    # 当前时间 + 实时天气事实注入（只影响发给模型的内容，不写入记忆）：
+    # 模型据此如实回答"现在几点/今天天气"，不再靠猜或含糊其辞。
+    # 时间每轮都带（精确到分钟）；天气仅在命中提问关键词时联网查询一次（带缓存）。
+    _fact_prefix = ""
+    try:
+        from tool.time_utils import build_time_context as _btc2
+        from tool.weather_utils import weather_note_if_asked as _wn2
+        _fact_prefix = f"[{_btc2()}]"
+        _wx2 = _wn2(user_text)
+        if _wx2:
+            _fact_prefix += "\n" + _wx2
+        _fact_prefix += "\n"
+    except Exception:
+        _fact_prefix = ""
+
     # 图片消息处理：text 为空但有 vision_desc → 用图片描述作为真实用户输入
     # （避免 [CQ:image...] 垃圾文本被当作对话内容，导致 AI 依赖历史记忆误判）
     if vision_desc:
         if user_text and user_text.strip():
             messages.append({
                 "role": "user",
-                "content": f"主人发来了一张图片，图片内容：{vision_desc}\n主人的话：{user_text}",
+                "content": f"{_fact_prefix}主人发来了一张图片，图片内容：{vision_desc}\n主人的话：{user_text}",
             })
         else:
             messages.append({
                 "role": "user",
-                "content": f"主人发来了一张图片，图片内容：{vision_desc}",
+                "content": f"{_fact_prefix}主人发来了一张图片，图片内容：{vision_desc}",
             })
     else:
-        messages.append({"role": "user", "content": user_text})
+        messages.append({"role": "user", "content": f"{_fact_prefix}{user_text}"})
 
     # 表情包指令（仅当启用且存在表情包时）
     # 允许 0~2 个：AI 根据语境自主决定发不发、发几张

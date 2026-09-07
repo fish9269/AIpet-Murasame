@@ -117,8 +117,17 @@ def qwen3_lora(history, user_input, role):
     messages.extend(filtered_history)
 
     time_ctx = build_time_context()
+    wx_note = ""
+    try:
+        from tool.weather_utils import weather_note_if_asked
+        wx_note = weather_note_if_asked(user_input) or ""
+    except Exception:
+        pass
     if role != "system":
-        user_input = f"[{time_ctx}]{user_input}"
+        if wx_note:
+            user_input = f"[{time_ctx}]\n{wx_note}\n{user_input}"
+        else:
+            user_input = f"[{time_ctx}]{user_input}"
         history.append({"role": role, "content": user_input})
         messages.append({"role": role, "content": user_input})
     else:

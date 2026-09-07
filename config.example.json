@@ -63,5 +63,7 @@
   "ui_theme": "classic",
   "ui_accent": "blue",
   "qq_max_reply_chars": 0,
-  "qq_max_replies_per_conversation": 0
+  "qq_max_replies_per_conversation": 0,
+  "weather_city": "",
+  "weather_enable": "true"
 }

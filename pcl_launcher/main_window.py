@@ -930,6 +930,8 @@ class PCLMainWindow(QWidget):
 
         # ===== 双启动按钮（桌宠 + QQ）=====
         self._qq_process = None
+        self._napcat_proc = None             # 本启动器拉起的 start_napcat.bat 控制台进程（Popen 句柄）
+        self._napcat_started_by_us = False   # 本次会话 NapCat 是否由本启动器拉起（关闭 QQ 时连带关闭）
         btn_row = QHBoxLayout()
         btn_row.setSpacing(int(12 * S))
 
@@ -1322,7 +1324,9 @@ class PCLMainWindow(QWidget):
     def _kill_qq_process(self):
         """关闭 QQ AIpet 进程。
         除启动器跟踪的进程外，还兜底清理从本目录启动的所有 run_qq.py 残留实例
-        （多开/历史残留会导致"关了还在回话/抢消息"，一并清掉）。"""
+        （多开/历史残留会导致"关了还在回话/抢消息"，一并清掉）。
+        NapCat 若由本启动器本次会话拉起（_napcat_started_by_us），连同其
+        控制台窗口进程树一起关闭，避免"关了 QQ AIpet 还留着 NapCat 窗口"。"""
         if self._qq_process is not None:
             self._kill_process(self._qq_process)
             self._qq_process = None
@@ -1330,6 +1334,54 @@ class PCLMainWindow(QWidget):
             self._kill_stray_run_qq(_app_base_dir())
         except Exception:
             pass
+        self._kill_napcat_if_ours()
+
+    def _kill_napcat_if_ours(self):
+        """关闭由本启动器拉起的 NapCat（start_napcat.bat 控制台及其进程树）。
+
+        仅在 _napcat_started_by_us 为 True（NapCat 由本启动器这次会话拉起）时动作，
+        用户手动启动的 NapCat 保留不动。
+        ① 优先按保存的 Popen 句柄用 taskkill /T 树杀（cmd → NapCatWinBootMain → QQ 全家）；
+        ② 句柄丢失/已退出但 NapCat 还在 → 按本绿色版目录特征兜底清理主进程。"""
+        if not getattr(self, "_napcat_started_by_us", False):
+            return
+        self._napcat_started_by_us = False
+        proc = getattr(self, "_napcat_proc", None)
+        if proc is not None:
+            self._napcat_proc = None
+            try:
+                if proc.poll() is None:
+                    import subprocess as _sp
+                    _sp.run(
+                        ["taskkill", "/F", "/T", "/PID", str(proc.pid)],
+                        capture_output=True, timeout=10,
+                        creationflags=getattr(_sp, "CREATE_NO_WINDOW", 0),
+                    )
+                    print("[PCL] ✅ 已随 QQ AIpet 关闭 NapCat（含控制台窗口）")
+                    return
+            except Exception:
+                pass
+        # 兜底：按目录特征清理本绿色版目录内的 NapCat 主进程（不影响别处安装的 QQ/NapCat）
+        try:
+            import subprocess as _sp
+            base = _app_base_dir()
+            base_esc = base.replace("'", "''")
+            ps_cmd = (
+                "Get-CimInstance Win32_Process | Where-Object { "
+                "$_.ExecutablePath -like '" + base_esc + "*' -and "
+                "($_.Name -eq 'NapCatWinBootMain.exe' -or "
+                "($_.Name -eq 'QQ.exe' -and "
+                "$_.ExecutablePath -like '*NapCat.Shell.Windows.OneKey\\bootmain*')) } | "
+                "ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }"
+            )
+            _sp.run(
+                ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", ps_cmd],
+                capture_output=True, timeout=15,
+                creationflags=getattr(_sp, "CREATE_NO_WINDOW", 0),
+            )
+            print("[PCL] ✅ NapCat 兜底进程清理完成")
+        except Exception as e:
+            print(f"[PCL] ⚠ NapCat 关闭失败: {e}")
 
     @staticmethod
     def _kill_stray_run_qq(base: str):
@@ -1432,13 +1484,17 @@ class PCLMainWindow(QWidget):
 
         print(f"[PCL] NapCat 未运行，正在自动启动: {napcat_bat}")
         try:
-            subprocess.Popen(
+            self._napcat_proc = subprocess.Popen(
                 [napcat_bat],
                 cwd=os.path.dirname(napcat_bat),
                 creationflags=subprocess.CREATE_NEW_CONSOLE
             )
+            # 记录 NapCat 由本启动器拉起 → 关闭 QQ AIpet 时连带关闭（含控制台窗口）
+            self._napcat_started_by_us = True
         except Exception as e:
             print(f"[PCL] ⚠ 启动 NapCat 失败: {e}")
+            self._napcat_proc = None
+            self._napcat_started_by_us = False
             self._show_config_dialog("NapCat 启动失败")
             return
 
@@ -1488,7 +1544,8 @@ class PCLMainWindow(QWidget):
 
     def _on_qq_clicked(self):
         """启动/关闭 QQ AIpet（启动前自动确保 NapCat 运行，异步不阻塞 UI）"""
-        # 正在等待 NapCat 就绪时再次点击 → 取消等待（NapCat 窗口保留，稍后可直接再点启动）
+        # 正在等待 NapCat 就绪时再次点击 → 取消等待
+        # （NapCat 窗口保留给用户手动接管；此后不再由本启动器负责连带关闭）
         if getattr(self, "_napcat_wait_running", False):
             print("[PCL] 已取消等待 NapCat（NapCat 窗口保持运行，再点一次即可直接启动 QQ AIpet）")
             try:
@@ -1497,6 +1554,8 @@ class PCLMainWindow(QWidget):
                 pass
             self._napcat_wait_running = False
             self._napcat_wait_elapsed = 0
+            self._napcat_started_by_us = False  # 用户接管 NapCat，关闭 QQ 时不再连带关闭
+            self._napcat_proc = None
             self.qq_btn.setEnabled(True)
             self.qq_btn.setText("  💬 启动 QQ AIpet")
             return
