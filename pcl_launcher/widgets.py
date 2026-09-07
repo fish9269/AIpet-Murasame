@@ -553,7 +553,7 @@ class PCLSettingsPanel(QWidget):
         self._cur_layout.addWidget(cap_lbl)
         self._add_spin("qq_max_reply_chars", "单次回复最多字数（0=不限）", 0, 2000, 0)
         self._add_spin("qq_max_replies_per_conversation",
-                       "每次对话最多回复次数（0=不限）", 0, 30, 0)
+                       "单条回复最多发几条消息（0=不限）", 0, 30, 0)
         # 对话调节改动即写盘（运行中的 QQ 桥接实时读取生效，无需重启 QQ）
         self._wire_autosave("spin", "qq_max_reply_chars")
         self._wire_autosave("spin", "qq_max_replies_per_conversation")
