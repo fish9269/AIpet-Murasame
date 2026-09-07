@@ -14,7 +14,8 @@ from PyQt5.QtCore import (
     QAbstractAnimation, QRect, QRectF
 )
 from PyQt5.QtGui import (
-    QPainter, QColor, QPainterPath, QFont, QPixmap, QIcon, QSurfaceFormat, QImage
+    QPainter, QColor, QPainterPath, QFont, QPixmap, QIcon, QSurfaceFormat,
+    QImage, QRegion
 )
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QStackedWidget, QApplication,
@@ -735,9 +736,26 @@ class PCLMainWindow(QWidget):
 
     def showEvent(self, event):
         super().showEvent(event)
+        self._apply_round_mask()
         if self._model_queue and self._preview_widget is None:
             pet_id, path = self._model_queue.pop(0)
             self._preview_pet(pet_id, path)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._apply_round_mask()
+
+    def _apply_round_mask(self):
+        """启动器窗口全局圆角（与主题无关）：按窗口尺寸生成圆角遮罩，
+        四角透明由 WA_TranslucentBackground 呈现为桌面圆角效果"""
+        try:
+            r = int(18 * S)
+            path = QPainterPath()
+            path.addRoundedRect(QRectF(self.rect()), r, r)
+            poly = path.toFillPolygon().toPolygon()
+            self.setMask(QRegion(poly))
+        except Exception:
+            pass
 
     def _setup_window(self):
         # 不再置顶：PCL 是普通窗口，可通过任务栏正常最小化（用户反馈）
