@@ -674,8 +674,7 @@ class _RoundedBgLabel(QLabel):
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing, True)
         try:
-            _m = int(8 * S)            # pan_back 四周内边距
-            _r = max(1, int(26 * S) - _m)  # 换算后的本控件圆角半径
+            _r = int(26 * S)          # 满铺窗口：圆角半径=窗口圆角
             _path = QPainterPath()
             _path.addRoundedRect(QRectF(self.rect()), _r, _r)
             p.setClipPath(_path)
@@ -722,7 +721,7 @@ class PCLMainWindow(QWidget):
 
         self._setup_window()
         self.pan_back = QWidget(self)
-        self.pan_back.setGeometry(int(8 * S), int(8 * S), int(self.width() - 16 * S), int(self.height() - 16 * S))
+        self.pan_back.setGeometry(0, 0, self.width(), self.height())
         self._build_ui()
 
         self._fade_timer = QTimer(self); self._fade_step = 0; self._fade_max = 0; self._fade_cb = None; self._fade_effect = None
@@ -1823,6 +1822,6 @@ class PCLMainWindow(QWidget):
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
-        self.pan_back.setGeometry(int(8 * S), int(8 * S), self.width() - int(16 * S), self.height() - int(16 * S))
+        self.pan_back.setGeometry(0, 0, self.width(), self.height())
         self._update_background()
         self._place_corner_decor()

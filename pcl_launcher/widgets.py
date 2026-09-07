@@ -161,13 +161,21 @@ class PCLTitleBar(QWidget):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing)
         rect = self.rect()
-        # 顶部目录条与窗口圆角保持一致：标签距窗口四边 8px，换算圆角半径 26-8=18，
-        # 渐变四角随窗口一起裁圆，不会把窗口上圆角盖成直角
+        # 顶部目录条背景圆角：只圆上两个角（与窗口上角一致，r=26），
+        # 下沿保持平直与内容区衔接；满铺到窗口边缘无内边距描边
         try:
-            _r = int(18 * S)
-            _path = QPainterPath()
-            _path.addRoundedRect(QRectF(rect), _r, _r)
-            painter.setClipPath(_path)
+            _r = int(26 * S)
+            _w = rect.width()
+            if _w > 0:
+                _path = QPainterPath()
+                _path.moveTo(0, rect.height())
+                _path.lineTo(0, _r)
+                _path.quadTo(0, 0, _r, 0)
+                _path.lineTo(_w - _r, 0)
+                _path.quadTo(_w, 0, _w, _r)
+                _path.lineTo(_w, rect.height())
+                _path.closeSubpath()
+                painter.setClipPath(_path)
         except Exception:
             pass
         if self._interp_start and self._interp_progress < 1.0:
