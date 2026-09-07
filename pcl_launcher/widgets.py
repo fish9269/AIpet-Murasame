@@ -632,14 +632,22 @@ class PCLSettingsPanel(QWidget):
         self._layout.addStretch()
 
         # ===== 固定底部条：保存按钮固定在面板右下角 =====
-        # 位于滚动区之外 → 不随设置内容滚动；全局所有分类（全部/桌宠/QQ/微信/其他）下始终可见
-        btn_save = QPushButton("  💾 保存  ")
+        # 位于滚动区之外 → 不随设置内容滚动；全局所有分类（全部/桌宠/QQ/微信/其他）下始终可见。
+        # 圆形按钮样式：正圆（半径=边长一半），只放图标，hover/悬停有 tooltip 说明
+        _save_d = int(46 * S)          # 圆形按钮直径
+        _save_r = int(_save_d / 2)     # 圆角 = 直径一半 → 正圆
+        btn_save = QPushButton("💾")
+        btn_save.setFixedSize(_save_d, _save_d)
         btn_save.setCursor(Qt.PointingHandCursor)
+        btn_save.setToolTip("保存全部配置（不随滚动移动，始终固定在此）")
         btn_save.setStyleSheet(f"""
-            QPushButton {{ background: {Color3.name()}; color: white; border: none;
-                padding: {int(10*S)}px {int(30*S)}px; font-size: {int(13*S)}px;
-                border-radius: {btn_radius()}px; font-family: 'Microsoft YaHei'; }}
-            QPushButton:hover {{ background: {Color4.name()}; }}
+            QPushButton {{ background: qlineargradient(x1:0,y1:0,x2:0,y2:1,
+                stop:0 {Color4.name()}, stop:1 {Color3.name()});
+                color: white; border: 2px solid rgba(255,255,255,0.65);
+                font-size: {int(20*S)}px; border-radius: {_save_r}px; }}
+            QPushButton:hover {{ border-color: white;
+                background: qlineargradient(x1:0,y1:0,x2:0,y2:1,
+                stop:0 {Color3.name()}, stop:1 {Color4.name()}); }}
             QPushButton:pressed {{ background: {Color2.name()}; }}
         """)
         btn_save.clicked.connect(self._save_config)
