@@ -71,11 +71,10 @@ class PCLTitleBar(QWidget):
         self._update_nav_style()
 
     def _make_nav_btn(self, text, icon_path, index, img_key=None):
-        btn = QPushButton(f"  {text}")
-        btn.setCheckable(True)
         _art = nav_icon_path(img_key) if img_key else ""
         if _art:
-            # 主题提供导航按钮图：图 + 文字并存（不丢文字提示）
+            # 主题提供导航按钮图：图标 + 白色描边文字子层（原生绘制，稳定不崩）
+            btn = _NavOutlineButton(f"  {text}")
             _pix = QPixmap(_art)
             btn.setIcon(QIcon(_art))
             if not _pix.isNull():
@@ -85,9 +84,11 @@ class PCLTitleBar(QWidget):
             btn.setToolTip(text)
             btn.setStyleSheet(nav_img_btn_qss())
         else:
+            btn = QPushButton(f"  {text}")
             btn.setIcon(QIcon(icon_path))
             btn.setIconSize(QPixmap(icon_path).scaled(int(18 * S), int(18 * S)).size())
             btn.setStyleSheet(nav_btn_qss())
+        btn.setCheckable(True)
         btn.clicked.connect(lambda: self._on_nav(index))
         return btn
 
@@ -208,6 +209,33 @@ class _OutlineTextLabel(QLabel):
         p.end()
 
 
+class _NavOutlineButton(QPushButton):
+    """主题图片导航按钮：原生 QPushButton 负责高亮胶囊与图标（稳定），
+    白色描边文字用子 QLabel 叠加（鼠标穿透、不参与按钮绘制）。"""
+
+    def __init__(self, text, parent=None):
+        super().__init__("", parent)
+        self.setCheckable(True)
+        self.setCursor(Qt.PointingHandCursor)
+        self._cap = _OutlineTextLabel(text.strip(), parent=self, width=2.2, fill=Color1)
+        self._cap.setAttribute(Qt.WA_TransparentForMouseEvents)
+        self._cap.setFont(QFont("Microsoft YaHei", int(13 * S)))
+        self._cap.show()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        try:
+            iw = self.iconSize().width()
+            w, h = self.width(), self.height()
+            if w <= 0 or h <= 0:
+                return
+            gap = 6
+            x = int(w / 2 + iw / 2 + gap)  # 图标由原生居中，文字紧随其后
+            self._cap.setGeometry(x, 0, max(0, w - x), h)
+        except Exception:
+            pass
+
+
 class PCLSidebar(QWidget):
     model_selected = pyqtSignal(str, str, str)  # (pet_id, name, model_path)
 
@@ -275,9 +303,8 @@ class PCLSidebar(QWidget):
             if os.path.exists(icon_path):
                 avatar.setPixmap(QPixmap(icon_path).scaled(int(32*S), int(32*S), Qt.KeepAspectRatio, Qt.SmoothTransformation))
         row.addWidget(avatar)
-        label = QLabel(name)
+        label = _OutlineTextLabel(name, fill=Color1)
         label.setFont(QFont("Microsoft YaHei", int(14*S), QFont.Bold))
-        label.setStyleSheet(f"color: {Color1.name()}; background: transparent; border: none;")
         row.addWidget(label, 1)
         container.mousePressEvent = lambda ev, i=idx: self._select(i)
         avatar.mousePressEvent = lambda ev, i=idx: self._select(i)
