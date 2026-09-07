@@ -307,10 +307,14 @@ class PCLSettingsPanel(QScrollArea):
         title.setStyleSheet(f"color: {Color1.name()};")
         self._layout.addWidget(title)
 
+        # ===== ① 基础信息与密钥 =====
+        self._section("基础信息与密钥", "🔑")
         self._add_text_input("user_name", "使用者名称", "")
         self._add_text_input("deepseek_api_key", "DeepSeek API Key", "", placeholder="sk-...")
         self._add_text_input("qwen_api_key", "Qwen API Key", "", placeholder="sk-...")
 
+        # ===== ② 对话模型与推理 =====
+        self._section("对话模型与推理", "🤖")
         self._add_slider("model_type", "对话模型", ["local", "deepseek", "qwen"], "qwen")
         self._add_model_combo(
             "short_model_name", "短文本模型名",
@@ -319,14 +323,11 @@ class PCLSettingsPanel(QScrollArea):
             "qwen-plus",
             hint="可编辑：仅限 deepseek/qwen 两族模型名"
         )
-        self._add_slider("tts_type", "TTS 语音合成", ["local", "cloud"], "local")
-        self._add_slider("portrait", "立绘类型", ["a", "b"], "b")
-        self._add_slider("screen_type", "屏幕识别", ["false", "true"], "false")
-        self._add_slider("voice_trigger", "语音识别", ["false", "true"], "false")
-        self._add_slider("live2d_enabled", "Live2D 模式", ["false", "true"], "true")
-        # 人脸识别相关设置已迁移至「插件 → 人脸识别 → 设置」（face_recognition_enabled/
-        # camera_enabled/camera_id/camera_interval 由插件设置界面统一管理）
+        self._add_slider("reasoning_level", "推理等级", ["off", "low", "high", "max"], "off")
         self._add_slider("force_gpu_check", "强制 GPU 检查", ["false", "true"], "false")
+
+        # ===== ③ 长文本输出 =====
+        self._section("长文本输出", "📝")
         self._add_slider("longtext_enabled", "长文本输出模式", ["false", "true"], "true")
         self._add_slider("longtext_model", "长文本对话模型", ["qwen", "deepseek"], "deepseek")
         self._add_model_combo(
@@ -336,6 +337,10 @@ class PCLSettingsPanel(QScrollArea):
             "deepseek-v4-flash",
             hint="可编辑：仅限 deepseek/qwen 两族模型名"
         )
+
+        # ===== ④ 语音与视觉识别 =====
+        self._section("语音合成与识别", "🗣")
+        self._add_slider("tts_type", "TTS 语音合成", ["local", "cloud"], "local")
         self._add_model_combo(
             "vision_model_name", "视觉识别模型名",
             ["qwen3-vl-plus", "qwen3-vl-flash", "deepseek-v4-flash-vision-exp",
@@ -343,14 +348,18 @@ class PCLSettingsPanel(QScrollArea):
             "qwen3-vl-plus",
             hint="可编辑：QQ识图/摄像头/微信识图统一使用"
         )
-        self._add_slider("reasoning_level", "推理等级", ["off", "low", "high", "max"], "off")
+        self._add_slider("screen_type", "屏幕识别", ["false", "true"], "false")
+        self._add_slider("voice_trigger", "语音识别", ["false", "true"], "false")
 
-        # ===== QQ 配置分组 =====
-        qq_title = QLabel("  💬 QQ 聊天配置")
-        qq_title.setFont(QFont("Microsoft YaHei", int(14 * S), QFont.Bold))
-        qq_title.setStyleSheet(f"color: {Color1.name()}; margin-top: {int(16*S)}px;")
-        self._layout.addWidget(qq_title)
+        # ===== ⑤ Live2D 与立绘 =====
+        self._section("Live2D 与立绘", "🎭")
+        # 人脸识别相关设置已迁移至「插件 → 人脸识别 → 设置」（face_recognition_enabled/
+        # camera_enabled/camera_id/camera_interval 由插件设置界面统一管理）
+        self._add_slider("live2d_enabled", "Live2D 模式", ["false", "true"], "true")
+        self._add_slider("portrait", "立绘类型", ["a", "b"], "b")
 
+        # ===== ⑥ QQ 聊天配置 =====
+        self._section("QQ 聊天配置", "💬")
         self._add_text_input("qq_owner_id", "主主人 QQ 号（共享记忆）", "", placeholder="如：123456789（白名单第一位）")
         self._add_text_input("qq_master_ids_text", "额外主人白名单 QQ 号", "",
                              placeholder="逗号分隔，最多 4 个，如：111111,222222")
@@ -371,17 +380,15 @@ class PCLSettingsPanel(QScrollArea):
                               "（不会 @ 人、不会每条都回）。关闭：仅在被 @ 时回复群聊")
         self._add_spin("qq_lively_interval", "活泼接话间隔 (分钟)", 1, 120, 15)
 
-        # ===== 微信 ClawBot 配置分组 =====
-        wx_title = QLabel("  💬 微信 ClawBot 配置")
-        wx_title.setFont(QFont("Microsoft YaHei", int(14 * S), QFont.Bold))
-        wx_title.setStyleSheet(f"color: {Color1.name()}; margin-top: {int(16*S)}px;")
-        self._layout.addWidget(wx_title)
-
+        # ===== ⑦ 微信 ClawBot 配置 =====
+        self._section("微信 ClawBot 配置", "💬")
         self._add_slider("wechat_enabled", "微信 ClawBot 总开关", ["false", "true"], "false")
         self._add_slider("wechat_send_voice", "微信语音回复（尚不支持此功能）", ["false", "true"], "false")
         self._add_text_input("wechat_owner_id", "微信白名单（xxx@im.wechat，空=回复所有人）", "",
                              placeholder="如：wxid_xxx@im.wechat")
 
+        # ===== ⑧ 桌宠显示与空闲行为 =====
+        self._section("桌宠显示与空闲行为", "🖥")
         self._add_spin("screen_interval", "屏幕截图间隔 (秒)", 60, 3600, 300)
         self._add_spin("screen_index", "桌宠显示屏幕编号", 0, 3, 0)
         self._add_spin("idle_thinking_minutes", "空闲发呆阈值 (分钟)", 1, 60, 3)
@@ -471,6 +478,18 @@ class PCLSettingsPanel(QScrollArea):
             self._config_path = p
             return p
         return p
+
+    def _section(self, text, icon="🎯"):
+        """设置页分区标题（左侧主题色条 + 半透明底，视觉上把功能归类）"""
+        lbl = QLabel(f"  {icon} {text}")
+        lbl.setFont(QFont("Microsoft YaHei", int(13 * S), QFont.Bold))
+        lbl.setStyleSheet(
+            f"color: {Color3.name()}; margin-top: {int(18*S)}px;"
+            f"padding: {int(5*S)}px {int(10*S)}px;"
+            f"background: rgba(255,255,255,120);"
+            f"border-left: 4px solid {Color3.name()}; border-radius: {int(4*S)}px;")
+        self._layout.addWidget(lbl)
+        return lbl
 
     def _add_text_input(self, key, label, default="", placeholder=""):
         lbl = QLabel(f"  {label}")

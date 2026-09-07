@@ -10,7 +10,8 @@ import subprocess
 import urllib.request
 
 from PyQt5.QtCore import (
-    Qt, QTimer, QPropertyAnimation, QEasingCurve, QAbstractAnimation, QRect, QRectF
+    Qt, QTimer, QThread, pyqtSignal, QPropertyAnimation, QEasingCurve,
+    QAbstractAnimation, QRect, QRectF
 )
 from PyQt5.QtGui import (
     QPainter, QColor, QPainterPath, QFont, QPixmap, QIcon, QSurfaceFormat, QImage
@@ -19,7 +20,6 @@ from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QStackedWidget, QApplication,
     QLabel, QGraphicsOpacityEffect, QPushButton, QOpenGLWidget, QSizePolicy
 )
-from PyQt5.QtMultimedia import QAbstractVideoSurface
 
 # ===== API 控制 URL =====
 _CONTROL_BASE = "http://localhost:28565/control"
@@ -176,6 +176,42 @@ class Live2DPreviewWidget(QOpenGLWidget):
             print(f"[PCL] 壁纸纹理加载失败（用纯色预览底）: {e}")
             self._log_bg_err(f"纹理上传失败: {e}")
             self._bg_tex_ok = False
+
+    def _sync_video_tex(self):
+        """主题为视频背景时：把最新视频帧上传为 GL 纹理，live2d 区域与视频同步"""
+        try:
+            win = self.window()
+            if win is None:
+                return
+            serial = getattr(win, "_bg_video_serial", 0)
+            img = getattr(win, "_bg_video_frame", None)
+            if serial == getattr(self, "_bg_video_serial_done", -1):
+                return
+            if img is None or img.isNull():
+                return
+            rgba = img.convertToFormat(QImage.Format_RGBA8888).mirrored()
+            iw, ih = rgba.width(), rgba.height()
+            from OpenGL.GL import (glBindTexture, glTexImage2D, glPixelStorei,
+                                   glGenTextures,
+                                   GL_TEXTURE_2D, GL_RGBA, GL_UNSIGNED_BYTE,
+                                   GL_UNPACK_ALIGNMENT)
+            if not self._bg_tex:
+                self._bg_tex = glGenTextures(1)
+            glBindTexture(GL_TEXTURE_2D, self._bg_tex)
+            glPixelStorei(GL_UNPACK_ALIGNMENT, 1)
+            _raw = rgba.constBits()
+            if hasattr(_raw, "asstring"):
+                _raw = _raw.asstring(iw * ih * 4)
+            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, iw, ih, 0,
+                         GL_RGBA, GL_UNSIGNED_BYTE, _raw)
+            self._bg_tex_size = (iw, ih)
+            self._bg_tex_ok = True
+            self._bg_video_serial_done = serial
+            if getattr(self, "_vt", 0) < 3:
+                self._vt = getattr(self, "_vt", 0) + 1
+                self._log_bg_err(f"视频帧同步到 GL 纹理 #{self._vt}")
+        except Exception as e:
+            self._log_bg_err(f"视频纹理同步失败: {e}")
 
     def _log_bg_err(self, msg):
         try:
@@ -414,8 +450,16 @@ class Live2DPreviewWidget(QOpenGLWidget):
             from OpenGL.GL import glClearColor, glClear, GL_COLOR_BUFFER_BIT, GL_DEPTH_BUFFER_BIT
             glClearColor(*self._clear_color())
             glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
-            # 先把主题壁纸整图拉伸画满预览区，再叠 Live2D —— 背景不缺失、不穿透桌面
-            self._ensure_bg_tex()
+            # 先把主题背景画满预览区，再叠 Live2D —— 背景不缺失、不穿透桌面
+            # 视频主题：与解码线程的最新帧同步；图片/无背景：静态壁纸纹理
+            try:
+                _win = self.window()
+                if _win is not None and getattr(_win, "_bg_reader", None) is not None:
+                    self._sync_video_tex()
+                else:
+                    self._ensure_bg_tex()
+            except Exception:
+                pass
             self._draw_bg_quad()
         except Exception:
             pass
@@ -516,57 +560,89 @@ class PortraitPreviewWidget(QLabel):
 
 # ==================== 主窗口 ====================
 
-class _VideoBackgroundSurface(QAbstractVideoSurface):
-    """视频背景帧源：请求 RGB 帧并以软件方式解码为 QImage（QLabel 逐帧刷新用）。
+def _vlog_reset():
+    """清空视频背景调试日志（每次进入视频分支时调用一次）"""
+    try:
+        import os as _os
+        with open(_os.path.join(_app_base_dir(), "data", "video_bg.log"), "w",
+                  encoding="utf-8") as _f:
+            _f.write("")
+    except Exception:
+        pass
 
-    为什么不用 QVideoWidget：无边框+WA_TranslucentBackground 窗口叠加 DirectShow
-    视频层会触发 Qt5Multimedia.dll 栈溢出崩溃（0xC00000fd，WER 多次证实）；
-    软件解码帧完全绕开原生视频叠加层，透明/圆角/半透明都正常。"""
 
-    def __init__(self, parent=None):
+def _vlog(*args):
+    """视频背景调试日志（data/video_bg.log），故障排查用"""
+    try:
+        import os as _os
+        import datetime as _dt
+        with open(_os.path.join(_app_base_dir(), "data", "video_bg.log"), "a",
+                  encoding="utf-8") as _f:
+            _f.write("%s %s\n" % (_dt.datetime.now().strftime("%H:%M:%S.%f")[:-3],
+                                  " ".join(str(a) for a in args)))
+    except Exception:
+        pass
+
+
+class _VideoBgReader(QThread):
+    """视频背景解码线程（OpenCV）。
+
+    为什么不用 QtMultimedia：本机 Win11 26200 上 Qt5.15 的 WMF/DirectShow 引擎对
+    H.264 mp4 打开即 InvalidMedia/崩溃（Qt5Multimedia.dll 0xC00000FD 栈溢出），
+    OpenCV(ffmpeg) 实测可稳定解码。线程内循环读取 → 发 QImage → 主线程刷 QLabel。"""
+
+    frame_ready = pyqtSignal(object)
+
+    def __init__(self, path, parent=None):
         super().__init__(parent)
-        self._lock = threading.Lock()
-        self._img = None
+        self._path = path
+        self._running = True
 
-    def supportedPixelFormats(self, handleType=None):
+    def stop(self):
+        self._running = False
         try:
-            from PyQt5.QtMultimedia import QVideoFrame, QAbstractVideoBuffer
-            if handleType is not None and handleType != QAbstractVideoBuffer.NoHandle:
-                return []
+            self.wait(2000)
         except Exception:
             pass
-        return [QVideoFrame.Format_ARGB32,
-                QVideoFrame.Format_ARGB32_Premultiplied,
-                QVideoFrame.Format_RGB32,
-                QVideoFrame.Format_RGB24]
 
-    def present(self, frame):
+    def run(self):
+        cap = None
         try:
-            from PyQt5.QtMultimedia import QVideoFrame, QAbstractVideoBuffer
-            qf = {QVideoFrame.Format_ARGB32: QImage.Format_ARGB32,
-                  QVideoFrame.Format_ARGB32_Premultiplied: QImage.Format_ARGB32_Premultiplied,
-                  QVideoFrame.Format_RGB32: QImage.Format_RGB32,
-                  QVideoFrame.Format_RGB24: QImage.Format_RGB888}.get(frame.pixelFormat())
-            if qf is None:
-                return False
-            if not frame.map(QAbstractVideoBuffer.ReadOnly):
-                return False
-            try:
-                img = QImage(frame.bits(), frame.width(), frame.height(),
-                             frame.bytesPerLine(), qf).copy()
-            finally:
-                frame.unmap()
-            with self._lock:
-                self._img = img
-            return True
-        except Exception:
-            return False
-
-    def take_frame(self):
-        """取走最新一帧（GUI 定时器调用），无新帧返回 None"""
-        with self._lock:
-            img, self._img = self._img, None
-        return img
+            import cv2
+            import time as _t
+            cap = cv2.VideoCapture(self._path)
+            if not cap.isOpened():
+                _vlog("cv2 open FAIL:", self._path)
+                return
+            fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
+            fps = max(1.0, min(60.0, fps))
+            period = 1.0 / fps
+            _vlog("cv2 opened ok fps=%.2f" % fps)
+            n = 0
+            while self._running:
+                ok, frame = cap.read()
+                if not ok:
+                    cap.set(cv2.CAP_PROP_POS_FRAMES, 0)  # 循环重播
+                    continue
+                n += 1
+                if n <= 2 or n % 300 == 0:
+                    _vlog("cv2 frame #%d" % n)
+                rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                h, w = rgb.shape[:2]
+                img = QImage(rgb.data, w, h, 3 * w, QImage.Format_RGB888).copy()
+                if self._running:
+                    self.frame_ready.emit(img)
+                self.msleep(int(period * 1000))
+        except Exception as e:
+            import traceback as _tb
+            _vlog("reader EXC:", repr(e), _tb.format_exc(limit=3).replace("\n", " | "))
+        finally:
+            if cap is not None:
+                try:
+                    cap.release()
+                except Exception:
+                    pass
+            _vlog("reader exit")
 
 
 class PCLMainWindow(QWidget):
@@ -656,10 +732,9 @@ class PCLMainWindow(QWidget):
         self._bg_kind = ""
         self._bg_label = None
         self._bg_pixmap = None
-        self._bg_player = None
-        self._bg_playlist = None
-        self._bg_surface = None      # 视频背景：软件解码帧（替代 QVideoWidget）
-        self._bg_video_timer = None
+        self._bg_reader = None       # 视频背景：OpenCV 解码线程
+        self._bg_video_frame = None  # 最新视频帧（供 Live2D 预览区 GL 同步）
+        self._bg_video_serial = 0    # 帧序号（新帧 +1）
         try:
             kind, path, opacity = background_info()
             self._bg_kind = kind
@@ -676,14 +751,11 @@ class PCLMainWindow(QWidget):
                 self._bg_label.lower()
             elif kind == "video" and path:
                 try:
-                    from PyQt5.QtMultimedia import QMediaPlayer, QMediaContent
-                    from PyQt5.QtCore import QUrl as _QUrl
-                    # 两个 Qt5Multimedia 崩溃坑（均曾实测 0xC00000FD 栈溢出）：
-                    # 1) 无边框透明窗 + QVideoWidget 原生视频层 → 本机必崩；
-                    # 2) QMediaPlaylist 循环播放：视频播到结尾自动 Loop 重启时
-                    #    Qt5Multimedia.dll 内部递归 → 栈溢出。
-                    # 因此：软件解码帧刷 QLabel（_VideoBackgroundSurface/_tick_video_bg），
-                    # 不用播放列表，播完由 EndOfMedia 信号在 Python 侧手动重播。
+                    _vlog_reset()
+                    _vlog("video branch start:", path)
+                    # 视频解码用 OpenCV(ffmpeg) 线程，完全绕开 QtMultimedia：
+                    # 本机 Win11 26200 上 Qt5.15 WMF/DirectShow 引擎打开 H.264 mp4
+                    # 即 InvalidMedia 或 Qt5Multimedia.dll 栈溢出(0xC00000FD)，不可用。
                     self._bg_label = QLabel(self.pan_back)
                     self._bg_label.setAttribute(Qt.WA_TransparentForMouseEvents)
                     self._bg_label.setGeometry(0, 0, self.pan_back.width(), self.pan_back.height())
@@ -693,21 +765,13 @@ class PCLMainWindow(QWidget):
                         self._bg_label.setGraphicsEffect(_eff2)
                     self._bg_label.show()
                     self._bg_label.lower()
-                    self._bg_player = QMediaPlayer(None, QMediaPlayer.VideoSurface)
-                    self._bg_surface = _VideoBackgroundSurface(self)
-                    self._bg_player.setVideoOutput(self._bg_surface)
-                    self._bg_player.setMedia(QMediaContent(_QUrl.fromLocalFile(path)))
-                    self._bg_player.mediaStatusChanged.connect(self._on_bg_media_status)
-                    self._bg_video_timer = QTimer(self)
-                    self._bg_video_timer.setInterval(33)
-                    self._bg_video_timer.timeout.connect(self._tick_video_bg)
-                    self._bg_video_timer.start()
-                    self._bg_player.play()
-                    print(f"[PCL] 视频背景播放中（软件帧模式）: {path}")
+                    self._bg_reader = _VideoBgReader(path, self)
+                    self._bg_reader.frame_ready.connect(self._on_bg_video_frame)
+                    self._bg_reader.start()
+                    print(f"[PCL] 视频背景播放中（OpenCV 解码）: {path}")
                 except Exception as e:
                     print(f"[PCL] 视频背景不可用（已跳过）: {e}")
-                    self._bg_player = None
-                    self._bg_surface = None
+                    self._bg_reader = None
                     self._bg_kind = ""
         except Exception:
             pass
@@ -730,14 +794,19 @@ class PCLMainWindow(QWidget):
         except Exception:
             pass
 
-    def _tick_video_bg(self):
-        """视频背景：从软件帧表面取最新帧 → cover 裁切 → 刷到背景 QLabel"""
+    def _on_bg_video_frame(self, img):
+        """OpenCV 解码线程送来一帧 → cover 裁切 → 刷到背景 QLabel"""
         try:
-            if self._bg_surface is None or self._bg_label is None:
-                return
-            img = self._bg_surface.take_frame()
             if img is None or img.isNull():
                 return
+            # 供 Live2D 预览区 GL 同步取用（paintGL 里上传为纹理）
+            self._bg_video_frame = img
+            self._bg_video_serial += 1
+            if self._bg_label is None:
+                return
+            self._tick_count = getattr(self, "_tick_count", 0) + 1
+            if self._tick_count <= 2 or self._tick_count % 300 == 0:
+                _vlog("frame->label #%d %dx%d" % (self._tick_count, img.width(), img.height()))
             w = self.pan_back.width()
             h = self.pan_back.height()
             if w <= 0 or h <= 0:
@@ -750,17 +819,6 @@ class PCLMainWindow(QWidget):
             pm = QPixmap.fromImage(img).scaled(
                 tw, th, Qt.KeepAspectRatioByExpanding, Qt.SmoothTransformation)
             self._bg_label.setPixmap(pm.copy((tw - w) // 2, (th - h) // 2, w, h))
-        except Exception:
-            pass
-
-    def _on_bg_media_status(self, status):
-        """视频背景播完手动重播（不用播放列表 Loop，规避 Qt5Multimedia 递归栈溢出）"""
-        try:
-            from PyQt5.QtMultimedia import QMediaPlayer
-            if status == QMediaPlayer.EndOfMedia and self._bg_player is not None:
-                self._bg_player.stop()
-                self._bg_player.setPosition(0)
-                self._bg_player.play()
         except Exception:
             pass
 
@@ -1485,7 +1543,12 @@ class PCLMainWindow(QWidget):
             """)
 
     def closeEvent(self, event):
-        """关闭窗口时一并终止桌宠与 QQ/微信进程"""
+        """关闭窗口时终止视频背景解码线程并一并结束桌宠与 QQ/微信进程"""
+        if getattr(self, "_bg_reader", None) is not None:
+            try:
+                self._bg_reader.stop()
+            except Exception:
+                pass
         self._kill_pet_process()
         self._kill_qq_process()
         self._kill_wechat_process()
