@@ -73,14 +73,14 @@ class PCLTitleBar(QWidget):
     def _make_nav_btn(self, text, icon_path, index, img_key=None):
         _art = nav_icon_path(img_key) if img_key else ""
         if _art:
-            # 主题提供导航按钮图：图标 + 白色描边文字子层（原生绘制，稳定不崩）
-            btn = _NavOutlineButton(f"  {text}")
+            # 主题提供导航按钮图：原生按钮（高亮胶囊）+ 子层自绘图标与白色描边文字
             _pix = QPixmap(_art)
-            btn.setIcon(QIcon(_art))
+            btn = _NavOutlineButton(text, _pix)
             if not _pix.isNull():
                 _h = int(34 * S)
                 _w = max(int(24 * S), int(_pix.width() * _h / max(1, _pix.height())))
-                btn.setIconSize(QSize(_w, _h))
+                btn._content._pix = _pix.scaled(_w, _h, Qt.KeepAspectRatio,
+                                                Qt.SmoothTransformation)
             btn.fit_to_content()
             btn.setToolTip(text)
             btn.setStyleSheet(nav_img_btn_qss())
@@ -210,28 +210,76 @@ class _OutlineTextLabel(QLabel):
         p.end()
 
 
-class _NavOutlineButton(QPushButton):
-    """主题图片导航按钮：原生 QPushButton 负责高亮胶囊与图标（稳定），
-    白色描边文字用子 QLabel 叠加（鼠标穿透、不参与按钮绘制）。"""
+class _NavContentLabel(QWidget):
+    """导航内容层（子 Widget 自绘，不碰按钮本身绘制）：
+    图标 + 白色描边文字整组居中。只使用 drawPixmap / QPainterPath，
+    这两种原语在普通 Widget 上已被大量验证稳定（在 QPushButton 上自绘会触发
+    Qt5Core 断言崩溃，实测两版均复现）。"""
 
-    def __init__(self, text, parent=None):
+    def __init__(self, text, pix, parent=None):
+        super().__init__(parent)
+        self.setAttribute(Qt.WA_TransparentForMouseEvents)
+        self._pix = pix
+        self._gap = 6
+        self._tw = 0
+        self._fill = QColor(Color1)
+        self._outline = QColor(255, 255, 255, 240)
+        self._ow = 2.2
+        self._text = text.strip()
+        self.setFont(QFont("Microsoft YaHei", int(13 * S)))
+        try:
+            from PyQt5.QtGui import QFontMetrics
+            self._tw = QFontMetrics(self.font()).horizontalAdvance(self._text)
+        except Exception:
+            pass
+
+    def content_width(self):
+        iw = self._pix.width() if self._pix is not None else 0
+        return iw + (self._gap if iw else 0) + self._tw
+
+    def paintEvent(self, event):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing, True)
+        w, h = self.width(), self.height()
+        if w <= 0 or h <= 0:
+            p.end()
+            return
+        has_icon = self._pix is not None and not self._pix.isNull()
+        total = self.content_width()
+        x0 = (w - total) / 2.0
+        if has_icon:
+            p.drawPixmap(int(x0), (h - self._pix.height()) // 2, self._pix)
+            x0 += self._pix.width() + self._gap
+        f = self.font()
+        p.setFont(f)
+        fm = p.fontMetrics()
+        y = (h - fm.height()) / 2.0 + fm.ascent()
+        tpath = QPainterPath()
+        tpath.addText(x0, y, f, self._text)
+        pen = QPen(self._outline, self._ow)
+        pen.setJoinStyle(Qt.RoundJoin)
+        p.strokePath(tpath, pen)
+        p.fillPath(tpath, self._fill)
+        p.end()
+
+
+class _NavOutlineButton(QPushButton):
+    """主题图片导航按钮：按钮本体保持原生绘制（高亮胶囊 QSS，稳定），
+    图标 + 白色描边文字由子 Widget 层绘制；宽度随文字自适应、文字完整显示。"""
+
+    def __init__(self, text, pix, parent=None):
         super().__init__("", parent)
         self.setCheckable(True)
         self.setCursor(Qt.PointingHandCursor)
-        self._cap = _OutlineTextLabel(text.strip(), parent=self, width=2.2, fill=Color1)
-        self._cap.setAttribute(Qt.WA_TransparentForMouseEvents)
-        self._cap.setFont(QFont("Microsoft YaHei", int(13 * S)))
-        self._cap.show()
-        self._cap.raise_()
-        self._gap = 6
-        self._pad = 14  # 两侧留白，避免贴边
+        self._pad = 12
+        self._content = _NavContentLabel(text, pix, parent=self)
+        self._content.show()
+        self._content.raise_()
 
     def fit_to_content(self):
-        """设置后调用：按 图标+间距+文字宽度 给按钮定最小宽度，文字层才有空间显示"""
+        """按 图标+间距+文字 设置最小宽度（按钮随文字长度自适应）"""
         try:
-            from PyQt5.QtGui import QFontMetrics
-            tw = QFontMetrics(self._cap.font()).horizontalAdvance(self._cap.text())
-            need = int(self.iconSize().width() + self._gap + tw + self._pad)
+            need = int(self._content.content_width() + 2 * self._pad)
             self.setMinimumWidth(max(need, self.minimumWidth()))
         except Exception:
             pass
@@ -239,14 +287,7 @@ class _NavOutlineButton(QPushButton):
     def resizeEvent(self, event):
         super().resizeEvent(event)
         try:
-            iw = self.iconSize().width()
-            w, h = self.width(), self.height()
-            if w <= 0 or h <= 0:
-                return
-            # 图标由原生居中，文字紧随其右（x 最小不低于 pad）
-            x = min(max(int((w + iw) / 2 + self._gap), self._pad),
-                    max(self._pad, w - self._pad))
-            self._cap.setGeometry(x, 0, max(0, w - x - self._pad), h)
+            self._content.setGeometry(0, 0, self.width(), self.height())
         except Exception:
             pass
 
