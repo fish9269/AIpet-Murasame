@@ -81,6 +81,7 @@ class PCLTitleBar(QWidget):
                 _h = int(34 * S)
                 _w = max(int(24 * S), int(_pix.width() * _h / max(1, _pix.height())))
                 btn.setIconSize(QSize(_w, _h))
+            btn.fit_to_content()
             btn.setToolTip(text)
             btn.setStyleSheet(nav_img_btn_qss())
         else:
@@ -221,6 +222,19 @@ class _NavOutlineButton(QPushButton):
         self._cap.setAttribute(Qt.WA_TransparentForMouseEvents)
         self._cap.setFont(QFont("Microsoft YaHei", int(13 * S)))
         self._cap.show()
+        self._cap.raise_()
+        self._gap = 6
+        self._pad = 14  # 两侧留白，避免贴边
+
+    def fit_to_content(self):
+        """设置后调用：按 图标+间距+文字宽度 给按钮定最小宽度，文字层才有空间显示"""
+        try:
+            from PyQt5.QtGui import QFontMetrics
+            tw = QFontMetrics(self._cap.font()).horizontalAdvance(self._cap.text())
+            need = int(self.iconSize().width() + self._gap + tw + self._pad)
+            self.setMinimumWidth(max(need, self.minimumWidth()))
+        except Exception:
+            pass
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
@@ -229,9 +243,10 @@ class _NavOutlineButton(QPushButton):
             w, h = self.width(), self.height()
             if w <= 0 or h <= 0:
                 return
-            gap = 6
-            x = int(w / 2 + iw / 2 + gap)  # 图标由原生居中，文字紧随其后
-            self._cap.setGeometry(x, 0, max(0, w - x), h)
+            # 图标由原生居中，文字紧随其右（x 最小不低于 pad）
+            x = min(max(int((w + iw) / 2 + self._gap), self._pad),
+                    max(self._pad, w - self._pad))
+            self._cap.setGeometry(x, 0, max(0, w - x - self._pad), h)
         except Exception:
             pass
 
