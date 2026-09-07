@@ -422,24 +422,35 @@ class PCLSidebar(QWidget):
 
 # ==================== 设置面板 (完整 Config 表单) ====================
 
-class PCLSettingsPanel(QScrollArea):
+class PCLSettingsPanel(QWidget):
     size_changed = pyqtSignal(int, int)
     color_changed = pyqtSignal(str)
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setWidgetResizable(True)
-        self.setFrameShape(QScrollArea.NoFrame)
-        self.setStyleSheet("QScrollArea { background: transparent; border: none; }")
+
+        # 外壳布局：上 = 可滚动设置内容区，下 = 固定底部条
+        # （保存按钮固定在右下角、不随内容滚动；本面板为全局唯一设置宿主，
+        #   所有分类共用，非单个主题专属）
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
 
         self._widgets = {}
         self._config_path = None
+
+        # 可滚动内容区（样式与原 QScrollArea 一致：透明、无边框）
+        self._scroll = QScrollArea()
+        self._scroll.setWidgetResizable(True)
+        self._scroll.setFrameShape(QScrollArea.NoFrame)
+        self._scroll.setStyleSheet("QScrollArea { background: transparent; border: none; }")
+        outer.addWidget(self._scroll, 1)
 
         container = QWidget()
         self._layout = QVBoxLayout(container)
         self._layout.setContentsMargins(int(30 * S), int(30 * S), int(30 * S), int(30 * S))
         self._layout.setSpacing(int(14 * S))
-        self.setWidget(container)
+        self._scroll.setWidget(container)
 
         title = QLabel("  ⚙ 桌宠配置")
         title.setFont(QFont("Microsoft YaHei", int(16 * S), QFont.Bold))
@@ -578,21 +589,10 @@ class PCLSettingsPanel(QScrollArea):
         self._add_spin("idle_away_minutes", "空闲离屏阈值 (分钟)", 2, 120, 10)
         self._add_double_spin("DEFAULT_PORTRAIT_SCREEN_RATIO", "立绘高度比例", 0.1, 1.0, 0.8, 0.05)
 
-        # 通用区（保存 / Live2D 调参）：全部与桌宠分类可见
+        # 通用区（Live2D 调参面板）：全部与桌宠分类可见
         self._open_box(("all", "pet"))
 
         self._cur_layout.addSpacing(int(10 * S))
-
-        # 保存按钮
-        btn_save = QPushButton("  💾 保存  ")
-        btn_save.setStyleSheet(f"""
-            QPushButton {{ background: {Color3.name()}; color: white; border: none;
-                padding: {int(10*S)}px {int(24*S)}px; font-size: {int(13*S)}px;
-                border-radius: {btn_radius()}px; font-family: 'Microsoft YaHei'; }}
-            QPushButton:hover {{ background: {Color4.name()}; }}
-        """)
-        btn_save.clicked.connect(self._save_config)
-        self._cur_layout.addWidget(btn_save, 0, Qt.AlignLeft)
 
         # Live2D 显示调参面板（PCL → 桌宠 API 实时应用/保存）
         self._cur_layout.addWidget(PCLLive2DTunePanel())
@@ -630,6 +630,24 @@ class PCLSettingsPanel(QScrollArea):
         self._cur_layout.addLayout(log_row)
 
         self._layout.addStretch()
+
+        # ===== 固定底部条：保存按钮固定在面板右下角 =====
+        # 位于滚动区之外 → 不随设置内容滚动；全局所有分类（全部/桌宠/QQ/微信/其他）下始终可见
+        btn_save = QPushButton("  💾 保存  ")
+        btn_save.setCursor(Qt.PointingHandCursor)
+        btn_save.setStyleSheet(f"""
+            QPushButton {{ background: {Color3.name()}; color: white; border: none;
+                padding: {int(10*S)}px {int(30*S)}px; font-size: {int(13*S)}px;
+                border-radius: {btn_radius()}px; font-family: 'Microsoft YaHei'; }}
+            QPushButton:hover {{ background: {Color4.name()}; }}
+            QPushButton:pressed {{ background: {Color2.name()}; }}
+        """)
+        btn_save.clicked.connect(self._save_config)
+        bottom_row = QHBoxLayout()
+        bottom_row.setContentsMargins(int(30 * S), int(6 * S), int(30 * S), int(14 * S))
+        bottom_row.addStretch(1)
+        bottom_row.addWidget(btn_save)
+        outer.addLayout(bottom_row)
 
         # 加载当前配置
         self._load_current_config()
