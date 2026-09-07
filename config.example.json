@@ -63,8 +63,5 @@
   "ui_theme": "classic",
   "ui_accent": "blue",
   "qq_max_reply_chars": 0,
-  "qq_max_replies_per_conversation": 0,
-  "qq_auto_login_enable": "false",
-  "qq_login_uin": "",
-  "qq_login_password": ""
+  "qq_max_replies_per_conversation": 0
 }
