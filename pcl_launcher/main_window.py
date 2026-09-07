@@ -192,11 +192,15 @@ class Live2DPreviewWidget(QOpenGLWidget):
             rgba = img.convertToFormat(QImage.Format_RGBA8888).mirrored()
             iw, ih = rgba.width(), rgba.height()
             from OpenGL.GL import (glBindTexture, glTexImage2D, glPixelStorei,
-                                   glGenTextures,
+                                   glGenTextures, glTexParameteri,
                                    GL_TEXTURE_2D, GL_RGBA, GL_UNSIGNED_BYTE,
-                                   GL_UNPACK_ALIGNMENT)
+                                   GL_UNPACK_ALIGNMENT, GL_TEXTURE_MIN_FILTER,
+                                   GL_TEXTURE_MAG_FILTER, GL_LINEAR)
             if not self._bg_tex:
                 self._bg_tex = glGenTextures(1)
+                glBindTexture(GL_TEXTURE_2D, self._bg_tex)
+                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR)
+                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR)
             glBindTexture(GL_TEXTURE_2D, self._bg_tex)
             glPixelStorei(GL_UNPACK_ALIGNMENT, 1)
             _raw = rgba.constBits()
