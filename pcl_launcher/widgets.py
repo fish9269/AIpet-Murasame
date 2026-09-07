@@ -161,10 +161,10 @@ class PCLTitleBar(QWidget):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing)
         rect = self.rect()
-        # 全局圆角：标题栏按窗口圆角裁切（窗口四周有 8px 内边距 → 换算半径）
+        # 顶部目录条与窗口圆角保持一致：标签距窗口四边 8px，换算圆角半径 26-8=18，
+        # 渐变四角随窗口一起裁圆，不会把窗口上圆角盖成直角
         try:
-            _m = int(8 * S)
-            _r = max(1, int(16 * S) - _m)
+            _r = int(18 * S)
             _path = QPainterPath()
             _path.addRoundedRect(QRectF(rect), _r, _r)
             painter.setClipPath(_path)

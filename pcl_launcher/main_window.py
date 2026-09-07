@@ -675,7 +675,7 @@ class _RoundedBgLabel(QLabel):
         p.setRenderHint(QPainter.Antialiasing, True)
         try:
             _m = int(8 * S)            # pan_back 四周内边距
-            _r = max(1, int(16 * S) - _m)  # 换算后的本控件圆角半径
+            _r = max(1, int(26 * S) - _m)  # 换算后的本控件圆角半径
             _path = QPainterPath()
             _path.addRoundedRect(QRectF(self.rect()), _r, _r)
             p.setClipPath(_path)
@@ -685,6 +685,24 @@ class _RoundedBgLabel(QLabel):
         if pm is not None and not pm.isNull():
             p.drawPixmap(0, 0, pm)
         p.end()
+
+
+class _RoundBackWidget(QWidget):
+    """窗口圆角底色层（透明窗口下父窗口 paintEvent 不可靠，
+    用普通子控件自绘最稳定）：整窗圆角路径填充主题 Color8，
+    四角外保持透明 → 与壁纸/标题栏各自圆角裁切拼成整体圆角轮廓。"""
+
+    def paintEvent(self, event):
+        try:
+            p = QPainter(self)
+            p.setRenderHint(QPainter.Antialiasing, True)
+            r = int(26 * S)
+            path = QPainterPath()
+            path.addRoundedRect(QRectF(self.rect()), r, r)
+            p.fillPath(path, QColor(Color8))
+            p.end()
+        except Exception:
+            pass
 
 
 class PCLMainWindow(QWidget):
@@ -767,33 +785,16 @@ class PCLMainWindow(QWidget):
         self._apply_round_mask()
 
     def _apply_round_mask(self):
-        """全局圆角（与主题无关）：透明窗口下不用 setMask（分层窗口会忽略），
-        改为父窗口 paintEvent 里绘制圆角底色实现；本方法仅保留给 resize 触发重绘。"""
+        # 窗口不做整体圆角（仅顶部目录条圆角，见 PCLTitleBar），保留透明窗口叠层
         try:
             self.update()
-        except Exception:
-            pass
-
-    def paintEvent(self, event):
-        """父窗口绘制圆角底色：四角外保持透明（露出桌面），
-        内部主题色底/壁纸/视频叠在其上，形成与主题无关的全局圆角窗口"""
-        try:
-            super().paintEvent(event)
-            p = QPainter(self)
-            p.setRenderHint(QPainter.Antialiasing, True)
-            r = int(16 * S)
-            path = QPainterPath()
-            path.addRoundedRect(QRectF(self.rect()), r, r)
-            p.fillPath(path, QColor(Color8))
-            p.end()
         except Exception:
             pass
 
     def _setup_window(self):
         # 不再置顶：PCL 是普通窗口，可通过任务栏正常最小化（用户反馈）
         self.setWindowFlags(Qt.FramelessWindowHint)
-        # 保持透明窗口：背景壁纸/视频/半透明控件全部依赖它正常叠层；
-        # 圆角由 paintEvent 绘制圆角底色 + 四角透明实现（主题无关）
+        # 保持透明窗口：主题壁纸/视频/半透明控件正常叠层
         self.setAttribute(Qt.WA_TranslucentBackground)
         w, h = int(1200 * S), int(900 * S)
         self.setMinimumSize(int(950 * S), int(700 * S))
