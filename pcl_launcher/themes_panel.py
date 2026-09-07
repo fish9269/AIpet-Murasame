@@ -162,6 +162,8 @@ class PCLThemesPanel(QScrollArea):
 
     # 应用主题后由主窗口负责重启（theme_id）
     theme_applied = pyqtSignal(str)
+    # 强调色（主题色）即时预览切换
+    accent_changed = pyqtSignal(str)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -186,6 +188,31 @@ class PCLThemesPanel(QScrollArea):
         hint.setWordWrap(True)
         hint.setStyleSheet(f"color: {Gray2.name()}; font-size: {int(12*S)}px;")
         self._layout.addWidget(hint)
+
+        # ===== 主题色（强调色）选择：与主题一体管理 =====
+        acc_label = QLabel("  🎨 主题色（强调色，点击即时预览切换）")
+        acc_label.setFont(QFont("Microsoft YaHei", int(13 * S), QFont.Bold))
+        acc_label.setStyleSheet(
+            f"color: {Color3.name()}; margin-top: {int(8*S)}px;"
+            f"padding: {int(5*S)}px {int(10*S)}px;"
+            f"background: rgba(255,255,255,120);"
+            f"border-left: 4px solid {Color3.name()}; border-radius: {int(4*S)}px;")
+        self._layout.addWidget(acc_label)
+        acc_row = QHBoxLayout(); acc_row.setSpacing(int(10 * S))
+        for key in ["blue", "red", "green", "gold", "dark", "crimson"]:
+            abtn = QPushButton()
+            abtn.setFixedSize(int(32 * S), int(32 * S))
+            abtn.setToolTip(key)
+            abtn.setStyleSheet(f"""
+                QPushButton {{ background: qlineargradient(x1:0,y1:0,x2:0,y2:1,
+                    stop:0 {THEME_COLORS[key]['title_start']},stop:1 {THEME_COLORS[key]['title_end']});
+                    border: 2px solid {Gray5.name()}; border-radius: {int(16*S)}px; }}
+                QPushButton:hover {{ border: 3px solid {Color3.name()}; }}
+            """)
+            abtn.clicked.connect(lambda checked, k=key: self.accent_changed.emit(k))
+            acc_row.addWidget(abtn)
+        acc_row.addStretch()
+        self._layout.addLayout(acc_row)
 
         top = QHBoxLayout()
         btn_import = QPushButton("  📦 导入主题 (zip)")

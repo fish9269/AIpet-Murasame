@@ -445,7 +445,8 @@ class PCLSettingsPanel(QScrollArea):
         cat_row = QHBoxLayout(); cat_row.setSpacing(int(6 * S))
         self._cat_btns = {}
         for _key, _label in (("all", "全部配置"), ("pet", "桌宠配置"),
-                             ("qq", "QQ配置"), ("wx", "微信配置")):
+                             ("qq", "QQ配置"), ("wx", "微信配置"),
+                             ("other", "其他配置")):
             _b = QPushButton(f"  {_label}")
             _b.setCheckable(True)
             _b.setCursor(Qt.PointingHandCursor)
@@ -550,27 +551,8 @@ class PCLSettingsPanel(QScrollArea):
         self._add_spin("idle_away_minutes", "空闲离屏阈值 (分钟)", 2, 120, 10)
         self._add_double_spin("DEFAULT_PORTRAIT_SCREEN_RATIO", "立绘高度比例", 0.1, 1.0, 0.8, 0.05)
 
-        # 通用页脚（主题色/保存/Live2D调参/更新日志）：全部与桌宠分类可见
+        # 通用区（保存 / Live2D 调参）：全部与桌宠分类可见
         self._open_box(("all", "pet"))
-
-        # 主题色
-        color_label = QLabel("🎨 主题色")
-        color_label.setStyleSheet(f"color: {Gray2.name()}; font-size: {int(12*S)}px;")
-        self._cur_layout.addWidget(color_label)
-        color_row = QHBoxLayout(); color_row.setSpacing(int(10 * S))
-        for key in ["blue", "red", "green", "gold", "dark", "crimson"]:
-            btn = QPushButton()
-            btn.setFixedSize(int(32 * S), int(32 * S))
-            btn.setStyleSheet(f"""
-                QPushButton {{ background: qlineargradient(x1:0,y1:0,x2:0,y2:1,
-                    stop:0 {THEME_COLORS[key]['title_start']},stop:1 {THEME_COLORS[key]['title_end']});
-                    border: 2px solid {Gray5.name()}; border-radius: {int(16*S)}px; }}
-                QPushButton:hover {{ border: 3px solid {Color3.name()}; }}
-            """)
-            btn.clicked.connect(lambda checked, k=key: self.color_changed.emit(k))
-            color_row.addWidget(btn)
-        color_row.addStretch()
-        self._cur_layout.addLayout(color_row)
 
         self._cur_layout.addSpacing(int(10 * S))
 
@@ -588,7 +570,8 @@ class PCLSettingsPanel(QScrollArea):
         # Live2D 显示调参面板（PCL → 桌宠 API 实时应用/保存）
         self._cur_layout.addWidget(PCLLive2DTunePanel())
 
-        # ===== 更新日志区（查看 / 导出 / 打开目录）=====
+        # ===== 「其他」分类：更新日志（查看 / 导出 / 打开目录）=====
+        self._open_box(("all", "other"))
         log_label = QLabel("  📜 更新日志")
         log_label.setFont(QFont("Microsoft YaHei", int(13 * S), QFont.Bold))
         log_label.setStyleSheet(f"color: {Color1.name()}; margin-top: {int(16*S)}px;")

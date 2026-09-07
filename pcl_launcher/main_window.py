@@ -1010,10 +1010,11 @@ class PCLMainWindow(QWidget):
         self.plugins_page.plugin_toggled.connect(self._on_plugin_toggled)
         self.stack.addWidget(self.plugins_page)
 
-        # 主题目录页（内置/自定义主题切换、导入导出）
+        # 主题目录页（内置/自定义主题切换、导入导出、主题色切换）
         from .themes_panel import PCLThemesPanel
         self.themes_page = PCLThemesPanel()
         self.themes_page.theme_applied.connect(self._on_theme_applied)
+        self.themes_page.accent_changed.connect(self._start_color_anim)
         self.stack.addWidget(self.themes_page)
 
         # 人脸库导航显隐：跟随「人脸识别」插件启用状态（停用则隐藏顶部目录）
