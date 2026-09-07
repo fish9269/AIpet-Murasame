@@ -429,6 +429,36 @@ class PCLSettingsPanel(QScrollArea):
         title.setStyleSheet(f"color: {Color1.name()};")
         self._layout.addWidget(title)
 
+        # ===== 顶部分类标签：全部配置 / 桌宠配置 / QQ配置 / 微信配置 =====
+        self._cat_entries = []
+        self._cat_filter = "all"
+        self._cur_layout = self._layout
+        chip_style = f"""
+            QPushButton {{ background: rgba(255,255,255,150); color: {Color1.name()};
+                border: 1px solid {Gray5.name()}; padding: {int(5*S)}px {int(14*S)}px;
+                font-size: {int(12*S)}px; border-radius: {btn_radius()}px;
+                font-family: 'Microsoft YaHei'; }}
+            QPushButton:hover {{ background: rgba(255,255,255,220); }}
+            QPushButton:checked {{ background: {Color3.name()}; color: white;
+                border-color: {Color3.name()}; font-weight: bold; }}
+        """
+        cat_row = QHBoxLayout(); cat_row.setSpacing(int(6 * S))
+        self._cat_btns = {}
+        for _key, _label in (("all", "全部配置"), ("pet", "桌宠配置"),
+                             ("qq", "QQ配置"), ("wx", "微信配置")):
+            _b = QPushButton(f"  {_label}")
+            _b.setCheckable(True)
+            _b.setCursor(Qt.PointingHandCursor)
+            _b.setStyleSheet(chip_style)
+            _b.clicked.connect(lambda _=False, k=_key: self._switch_cat(k))
+            self._cat_btns[_key] = _b
+            cat_row.addWidget(_b)
+        cat_row.addStretch()
+        self._layout.addLayout(cat_row)
+        self._cat_btns["all"].setChecked(True)
+        # 桌宠配置 = 基础/对话/语音/立绘/桌宠显示 等桌宠侧分区
+        self._open_box(("all", "pet"))
+
         # ===== ① 基础信息与密钥 =====
         self._section("基础信息与密钥", "🔑")
         self._add_text_input("user_name", "使用者名称", "")
@@ -481,6 +511,7 @@ class PCLSettingsPanel(QScrollArea):
         self._add_slider("portrait", "立绘类型", ["a", "b"], "b")
 
         # ===== ⑥ QQ 聊天配置 =====
+        self._open_box(("all", "qq"))
         self._section("QQ 聊天配置", "💬")
         self._add_text_input("qq_owner_id", "主主人 QQ 号（共享记忆）", "", placeholder="如：123456789（白名单第一位）")
         self._add_text_input("qq_master_ids_text", "额外主人白名单 QQ 号", "",
@@ -503,6 +534,7 @@ class PCLSettingsPanel(QScrollArea):
         self._add_spin("qq_lively_interval", "活泼接话间隔 (分钟)", 1, 120, 15)
 
         # ===== ⑦ 微信 ClawBot 配置 =====
+        self._open_box(("all", "wx"))
         self._section("微信 ClawBot 配置", "💬")
         self._add_slider("wechat_enabled", "微信 ClawBot 总开关", ["false", "true"], "false")
         self._add_slider("wechat_send_voice", "微信语音回复（尚不支持此功能）", ["false", "true"], "false")
@@ -510,6 +542,7 @@ class PCLSettingsPanel(QScrollArea):
                              placeholder="如：wxid_xxx@im.wechat")
 
         # ===== ⑧ 桌宠显示与空闲行为 =====
+        self._open_box(("all", "pet"))
         self._section("桌宠显示与空闲行为", "🖥")
         self._add_spin("screen_interval", "屏幕截图间隔 (秒)", 60, 3600, 300)
         self._add_spin("screen_index", "桌宠显示屏幕编号", 0, 3, 0)
@@ -517,10 +550,13 @@ class PCLSettingsPanel(QScrollArea):
         self._add_spin("idle_away_minutes", "空闲离屏阈值 (分钟)", 2, 120, 10)
         self._add_double_spin("DEFAULT_PORTRAIT_SCREEN_RATIO", "立绘高度比例", 0.1, 1.0, 0.8, 0.05)
 
+        # 通用页脚（主题色/保存/Live2D调参/更新日志）：全部与桌宠分类可见
+        self._open_box(("all", "pet"))
+
         # 主题色
         color_label = QLabel("🎨 主题色")
         color_label.setStyleSheet(f"color: {Gray2.name()}; font-size: {int(12*S)}px;")
-        self._layout.addWidget(color_label)
+        self._cur_layout.addWidget(color_label)
         color_row = QHBoxLayout(); color_row.setSpacing(int(10 * S))
         for key in ["blue", "red", "green", "gold", "dark", "crimson"]:
             btn = QPushButton()
@@ -534,9 +570,9 @@ class PCLSettingsPanel(QScrollArea):
             btn.clicked.connect(lambda checked, k=key: self.color_changed.emit(k))
             color_row.addWidget(btn)
         color_row.addStretch()
-        self._layout.addLayout(color_row)
+        self._cur_layout.addLayout(color_row)
 
-        self._layout.addSpacing(int(10 * S))
+        self._cur_layout.addSpacing(int(10 * S))
 
         # 保存按钮
         btn_save = QPushButton("  💾 保存  ")
@@ -547,16 +583,16 @@ class PCLSettingsPanel(QScrollArea):
             QPushButton:hover {{ background: {Color4.name()}; }}
         """)
         btn_save.clicked.connect(self._save_config)
-        self._layout.addWidget(btn_save, 0, Qt.AlignLeft)
+        self._cur_layout.addWidget(btn_save, 0, Qt.AlignLeft)
 
         # Live2D 显示调参面板（PCL → 桌宠 API 实时应用/保存）
-        self._layout.addWidget(PCLLive2DTunePanel())
+        self._cur_layout.addWidget(PCLLive2DTunePanel())
 
         # ===== 更新日志区（查看 / 导出 / 打开目录）=====
         log_label = QLabel("  📜 更新日志")
         log_label.setFont(QFont("Microsoft YaHei", int(13 * S), QFont.Bold))
         log_label.setStyleSheet(f"color: {Color1.name()}; margin-top: {int(16*S)}px;")
-        self._layout.addWidget(log_label)
+        self._cur_layout.addWidget(log_label)
         log_row = QHBoxLayout(); log_row.setSpacing(int(8 * S))
         log_style = f"""
             QPushButton {{ background: {Color6.name()}; color: {Color1.name()};
@@ -581,7 +617,7 @@ class PCLSettingsPanel(QScrollArea):
         log_row.addWidget(btn_export_log)
         log_row.addWidget(btn_open_log)
         log_row.addStretch()
-        self._layout.addLayout(log_row)
+        self._cur_layout.addLayout(log_row)
 
         self._layout.addStretch()
 
@@ -601,6 +637,27 @@ class PCLSettingsPanel(QScrollArea):
             return p
         return p
 
+    def _open_box(self, cats):
+        """开启一个可被顶部分类标签显隐的分区框；后续 _add_*/_section 都进该框"""
+        box = QWidget()
+        lay = QVBoxLayout(box)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(int(14 * S))
+        self._layout.addWidget(box)
+        self._cat_entries.append((box, set(cats)))
+        self._cur_layout = lay
+
+    def _switch_cat(self, key):
+        self._cat_filter = key
+        for _k, _b in getattr(self, "_cat_btns", {}).items():
+            _b.setChecked(_k == key)
+        self._apply_cat_filter()
+
+    def _apply_cat_filter(self):
+        f = getattr(self, "_cat_filter", "all")
+        for box, cats in getattr(self, "_cat_entries", []):
+            box.setVisible(f in cats)
+
     def _section(self, text, icon="🎯"):
         """设置页分区标题（左侧主题色条 + 半透明底，视觉上把功能归类）"""
         lbl = QLabel(f"  {icon} {text}")
@@ -610,13 +667,13 @@ class PCLSettingsPanel(QScrollArea):
             f"padding: {int(5*S)}px {int(10*S)}px;"
             f"background: rgba(255,255,255,120);"
             f"border-left: 4px solid {Color3.name()}; border-radius: {int(4*S)}px;")
-        self._layout.addWidget(lbl)
+        self._cur_layout.addWidget(lbl)
         return lbl
 
     def _add_text_input(self, key, label, default="", placeholder=""):
         lbl = QLabel(f"  {label}")
         lbl.setStyleSheet(f"color: {Gray2.name()}; font-size: {int(12*S)}px;")
-        self._layout.addWidget(lbl)
+        self._cur_layout.addWidget(lbl)
         inp = QLineEdit()
         inp.setText(str(default))
         inp.setPlaceholderText(placeholder)
@@ -626,7 +683,7 @@ class PCLSettingsPanel(QScrollArea):
                 background: rgba(255,255,255,190); font-family: 'Microsoft YaHei'; }}
             QLineEdit:focus {{ border: 1px solid {Color3.name()}; }}
         """)
-        self._layout.addWidget(inp)
+        self._cur_layout.addWidget(inp)
         self._widgets[key] = inp
 
     def _block_wheel(self, obj):
@@ -654,7 +711,7 @@ class PCLSettingsPanel(QScrollArea):
         slider.valueChanged.connect(lambda v: lbl.setText(f"{label}：{options[v]}"))
         row.addWidget(slider)
         row.addStretch()
-        self._layout.addLayout(row)
+        self._cur_layout.addLayout(row)
         self._widgets[key] = (slider, options, lbl)
 
     def _add_spin(self, key, label, min_val, max_val, default):
@@ -668,7 +725,7 @@ class PCLSettingsPanel(QScrollArea):
         spin.setStyleSheet(f"QSpinBox {{ border:1px solid {Gray5.name()}; padding:{int(4*S)}px; font-size:{int(13*S)}px; border-radius:{int(3*S)}px; }}")
         self._block_wheel(spin)
         row.addWidget(spin); row.addStretch()
-        self._layout.addLayout(row)
+        self._cur_layout.addLayout(row)
         self._widgets[key] = spin
 
     def _add_double_spin(self, key, label, min_val, max_val, default, step):
@@ -682,7 +739,7 @@ class PCLSettingsPanel(QScrollArea):
         spin.setStyleSheet(f"QDoubleSpinBox {{ border:1px solid {Gray5.name()}; padding:{int(4*S)}px; font-size:{int(13*S)}px; border-radius:{int(3*S)}px; }}")
         self._block_wheel(spin)
         row.addWidget(spin); row.addStretch()
-        self._layout.addLayout(row)
+        self._cur_layout.addLayout(row)
         self._widgets[key] = spin
 
     def _add_model_combo(self, key, label, options, default, hint=""):
@@ -708,7 +765,7 @@ class PCLSettingsPanel(QScrollArea):
             combo.setToolTip(hint)
         row.addWidget(combo)
         row.addStretch()
-        self._layout.addLayout(row)
+        self._cur_layout.addLayout(row)
         self._widgets[key] = combo
 
     def _load_current_config(self):
