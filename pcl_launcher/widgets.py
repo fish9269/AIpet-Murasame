@@ -2206,7 +2206,8 @@ class PCLPromptEditor(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(int(30 * S), int(30 * S), int(30 * S), int(30 * S))
+        # 提示词页：左右贴边与顶部目录条同宽
+        layout.setContentsMargins(0, int(16 * S), 0, int(16 * S))
         layout.setSpacing(int(12 * S))
 
         title = QLabel("  📝 提示词编辑器")

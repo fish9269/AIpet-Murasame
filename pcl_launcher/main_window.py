@@ -914,10 +914,10 @@ class PCLMainWindow(QWidget):
         self.stack = QStackedWidget()
         content_layout.addWidget(self.stack, 1)
 
-        # ===== 预览页 =====
+        # ===== 预览页（模型页）：左右贴边与顶部目录条同宽 =====
         self.preview_page = QWidget()
         self.preview_layout = QVBoxLayout(self.preview_page)
-        self.preview_layout.setContentsMargins(int(16 * S), int(16 * S), int(16 * S), int(16 * S))
+        self.preview_layout.setContentsMargins(0, int(14 * S), 0, int(10 * S))
         self.preview_layout.setSpacing(int(12 * S))
 
         # ===== 双启动按钮（桌宠 + QQ）=====
