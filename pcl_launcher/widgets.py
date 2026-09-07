@@ -554,6 +554,9 @@ class PCLSettingsPanel(QWidget):
         self._add_spin("qq_max_reply_chars", "单次回复最多字数（0=不限）", 0, 2000, 0)
         self._add_spin("qq_max_replies_per_conversation",
                        "每次对话最多回复次数（0=不限）", 0, 30, 0)
+        # 对话调节改动即写盘（运行中的 QQ 桥接实时读取生效，无需重启 QQ）
+        self._wire_autosave("spin", "qq_max_reply_chars")
+        self._wire_autosave("spin", "qq_max_replies_per_conversation")
 
         self._add_slider("qq_enabled", "QQ 功能总开关", ["false", "true"], "false")
         self._add_slider("qq_send_sticker", "QQ 表情包", ["false", "true"], "true")
@@ -880,7 +883,8 @@ class PCLSettingsPanel(QWidget):
             self._set_slider("wechat_send_voice", cfg.get("wechat_send_voice", "false"))
             self._set_if("wechat_owner_id", cfg.get("wechat_owner_id", ""))
             for k in ["screen_interval", "screen_index", "idle_thinking_minutes", "idle_away_minutes",
-                      "qq_auto_offline_minutes", "qq_lively_interval"]:
+                      "qq_auto_offline_minutes", "qq_lively_interval",
+                      "qq_max_reply_chars", "qq_max_replies_per_conversation"]:
                 self._set_if(k, cfg.get(k, 0))
             self._set_if("DEFAULT_PORTRAIT_SCREEN_RATIO", cfg.get("DEFAULT_PORTRAIT_SCREEN_RATIO", 0.8))
         except Exception:
@@ -946,7 +950,8 @@ class PCLSettingsPanel(QWidget):
             cfg["wechat_owner_id"] = self._get_text("wechat_owner_id")
 
             for k in ["screen_interval", "screen_index", "idle_thinking_minutes", "idle_away_minutes",
-                      "qq_auto_offline_minutes", "qq_lively_interval"]:
+                      "qq_auto_offline_minutes", "qq_lively_interval",
+                      "qq_max_reply_chars", "qq_max_replies_per_conversation"]:
                 w = self._widgets.get(k)
                 if isinstance(w, QSpinBox): cfg[k] = w.value()
             w = self._widgets.get("DEFAULT_PORTRAIT_SCREEN_RATIO")
