@@ -666,6 +666,27 @@ class _VideoBgReader(QThread):
             _vlog("reader exit")
 
 
+class _RoundedBgLabel(QLabel):
+    """背景标签（图片/视频壁纸用）：绘制时按窗口全局圆角裁切。
+    否则正方形标签会把父层画好的圆角区重新盖成方形角。"""
+
+    def paintEvent(self, event):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing, True)
+        try:
+            _m = int(8 * S)            # pan_back 四周内边距
+            _r = max(1, int(16 * S) - _m)  # 换算后的本控件圆角半径
+            _path = QPainterPath()
+            _path.addRoundedRect(QRectF(self.rect()), _r, _r)
+            p.setClipPath(_path)
+        except Exception:
+            pass
+        pm = self.pixmap()
+        if pm is not None and not pm.isNull():
+            p.drawPixmap(0, 0, pm)
+        p.end()
+
+
 class PCLMainWindow(QWidget):
     def __init__(self):
         super().__init__()
@@ -790,7 +811,7 @@ class PCLMainWindow(QWidget):
             kind, path, opacity = background_info()
             self._bg_kind = kind
             if kind == "image" and path:
-                self._bg_label = QLabel(self.pan_back)
+                self._bg_label = _RoundedBgLabel(self.pan_back)
                 self._bg_label.setAttribute(Qt.WA_TransparentForMouseEvents)
                 self._bg_label.setGeometry(0, 0, self.pan_back.width(), self.pan_back.height())
                 if opacity < 1.0:
@@ -807,7 +828,7 @@ class PCLMainWindow(QWidget):
                     # 视频解码用 OpenCV(ffmpeg) 线程，完全绕开 QtMultimedia：
                     # 本机 Win11 26200 上 Qt5.15 WMF/DirectShow 引擎打开 H.264 mp4
                     # 即 InvalidMedia 或 Qt5Multimedia.dll 栈溢出(0xC00000FD)，不可用。
-                    self._bg_label = QLabel(self.pan_back)
+                    self._bg_label = _RoundedBgLabel(self.pan_back)
                     self._bg_label.setAttribute(Qt.WA_TransparentForMouseEvents)
                     self._bg_label.setGeometry(0, 0, self.pan_back.width(), self.pan_back.height())
                     if opacity < 1.0:

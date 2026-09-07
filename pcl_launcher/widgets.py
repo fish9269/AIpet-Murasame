@@ -161,6 +161,15 @@ class PCLTitleBar(QWidget):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing)
         rect = self.rect()
+        # 全局圆角：标题栏按窗口圆角裁切（窗口四周有 8px 内边距 → 换算半径）
+        try:
+            _m = int(8 * S)
+            _r = max(1, int(16 * S) - _m)
+            _path = QPainterPath()
+            _path.addRoundedRect(QRectF(rect), _r, _r)
+            painter.setClipPath(_path)
+        except Exception:
+            pass
         if self._interp_start and self._interp_progress < 1.0:
             c1 = self._lerp_color(self._interp_start, self._accent_start, self._interp_progress)
             c2 = self._lerp_color(self._interp_end, self._accent_end, self._interp_progress)
