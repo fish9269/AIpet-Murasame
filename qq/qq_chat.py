@@ -430,23 +430,18 @@ def chat_once(user_text: str, use_sticker: bool = True, vision_desc: str = None,
     except Exception:
         _fact_prefix = ""
 
-    # 自主学习：遇到问题/不认识/链接/视频分享 → 联网取参考注文（system，不写入记忆）
+    # 自主学习：链接/提问 → 联网参考直接并入用户消息前缀（醒目且入记忆，便于追问）
     try:
-        from qq.qq_search import query_trigger as _qt, note_for_text as _nft
-        if _qt(user_text):
-            _web_note = _nft(user_text, img_desc=(vision_desc or ""))
-            if _web_note:
-                messages.append({"role": "system", "content": _web_note})
-            else:
-                from qq.qq_search import is_link as _il
-                if _il(user_text):
-                    # 链接确实存在但内容抓取失败 → 提示模型不要编造
-                    messages.append({"role": "system", "content": (
-                        "【提示】对方发来的这个链接，系统已尝试代为访问但未能提取到内容"
-                        "（该网站可能要求登录或开启了反爬）。你不需要打开任何网页："
-                        "请正常回应对方——可以说暂时没能看到链接里的内容，"
-                        "并自然地问对方链接大概是什么主题/能不能直接说说内容，"
-                        "不要编造链接里的具体内容，也不要长篇解释技术原因。")})
+        from qq.qq_search import note_for_text as _nft2
+        _web_note = _nft2(user_text, img_desc=(vision_desc or ""))
+        if _web_note:
+            _fact_prefix += _web_note + "\n"
+        else:
+            from qq.qq_search import is_link as _il2
+            if _il2(user_text):
+                _fact_prefix += ("【链接提示】系统已尝试代为打开该链接但未能提取到内容"
+                                 "（网站可能要登录或开启了反爬）。你不需要打开任何网页，"
+                                 "请如实说暂时没看到内容并请对方直接说说大概是什么，不要编造。\n")
     except Exception:
         pass
 
