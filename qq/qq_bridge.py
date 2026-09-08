@@ -988,6 +988,11 @@ class QQBotBridge:
                             text = (text + " " + stt).strip() if text.strip() else stt
                 except Exception as e:
                     print(f"[QQBridge] ⚠ 语音识别异常: {e}")
+            # 兜底：链接卡片/分享消息没有 text 段 → 从消息段提取链接与标题
+            if not text.strip():
+                _url_txt = self._extract_url_seg_text(message)
+                if _url_txt and not vision_desc and not video_seg:
+                    text = _url_txt[:200]
             if not text.strip() and not vision_desc and not video_seg:
                 return
             self._touch_activity()  # 有效对话 → 重置空闲计时
@@ -1030,10 +1035,16 @@ class QQBotBridge:
             # 提取纯文本并去掉 @ 前缀后回复
             clean = self._strip_at(group_text)
             if not clean.strip():
-                # @ + 纯图片（无文字）：允许走识图回复；@ 且无图无字则忽略
-                if not self._message_has_image(message):
+                # 兜底1：@ + 链接卡片/分享（无 text 段）→ 提取段内链接让 bot 解析
+                _url_txt = self._extract_url_seg_text(message)
+                if _url_txt:
+                    clean = _url_txt[:200]
+                elif self._message_has_image(message):
+                    # 兜底2：@ + 纯图片（无文字）→ 允许走识图回复
+                    clean = "（图片）"
+                else:
+                    # @ 且无图无字无链接 → 忽略
                     return
-                clean = "（图片）"
             self._touch_activity()  # 被点名 → 有效对话，重置空闲计时
             # 立即占用该群活泼冷却位：被 @ 的话题即将由正常回复回答，
             # 防止活泼模式在回复前把同一话题又插嘴一次（重复回复同一问题）
@@ -1072,6 +1083,33 @@ class QQBotBridge:
                 "vid_ref": vid_ref,      # 入队时刻的群最近视频快照
                 "message_id": message_id,  # 回复成功后记录，防离线补拉重复回复
             })
+
+    def _extract_url_seg_text(self, message) -> str:
+        """从消息段兜底提取链接/分享信息（QQ 链接卡片/图文分享没有 text 段时用）。
+        返回空格拼接的 URL/标题；无则空串。"""
+        import re as _re
+        out = []
+        try:
+            if not isinstance(message, list):
+                return ""
+            for seg in message:
+                if not isinstance(seg, dict):
+                    continue
+                d = seg.get("data") or {}
+                for k in ("url", "file", "title", "desc", "summary", "text"):
+                    v = d.get(k)
+                    if isinstance(v, str) and v.strip():
+                        v = v.strip()
+                        if (v.startswith("http") or k in ("title", "desc", "summary"))                                 and v not in out:
+                            out.append(v)
+                j = d.get("json") or d.get("meta") or d.get("content")
+                if isinstance(j, str):
+                    for m in _re.findall(r"https?://[^\s\"'、，。]+", j):
+                        if m not in out:
+                            out.append(m)
+        except Exception:
+            pass
+        return " ".join(out)
 
     def _extract_text(self, message, raw_message):
         """
