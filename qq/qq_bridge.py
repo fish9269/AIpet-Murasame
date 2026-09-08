@@ -414,6 +414,62 @@ class QQBotBridge:
               "（QQ 状态=离开，暂停自动回复；主人发消息立即恢复在线）")
         self._set_qq_online_status(30)
 
+    @staticmethod
+    def _message_has_image(message) -> bool:
+        """消息段是否含图片（仅判断类型，不下载不识别）"""
+        if not isinstance(message, list):
+            return False
+        return any(isinstance(s, dict) and s.get("type") == "image" for s in message)
+
+    def _note_group_image(self, group_id, message):
+        """记录某群最近一张图片的消息段（供 bot 回复该群前识图注入）。
+
+        只保存消息段元数据(file/url/id,体积小),识别在调度线程延迟执行;
+        与活泼模式开关无关,群里有人发图就会记,方便后续被 @ / 活泼接话时"看到"图。"""
+        try:
+            if not self._message_has_image(message):
+                return
+            with self._groups_lock:
+                g = self._group_buf.setdefault(str(group_id), {
+                    "last_others": 0.0,
+                    "last_bot_talk": 0.0,
+                    "recent": [],          # 最近若干条他人文本（带 @QQ号 硬标识）
+                    "name": self._group_display_name(group_id),
+                })
+                g["last_img"] = {"t": time.time(), "message": message}
+        except Exception as e:
+            print(f"[QQBridge] ⚠ 记录群图片失败: {e}")
+
+    def _group_recent_image_desc(self, group_id, max_age=240):
+        """回复群消息前，取本群最近一张图片做识别（须在调度线程内调用）。
+
+        - 图片 4 分钟内有效（太久远不强行关联当前话题）；
+        - 识别成功即清空缓存（描述随本轮回复文本进入会话记忆，后续轮可引用）；
+        - 失败/超时/无图一律返回 None，不阻塞正常回复。"""
+        try:
+            gid = str(group_id)
+            with self._groups_lock:
+                g = self._group_buf.get(gid)
+                if not g or not g.get("last_img"):
+                    return None
+                item = g["last_img"]
+                if time.time() - item["t"] > max_age:
+                    g.pop("last_img", None)
+                    return None
+                message = item["message"]
+            print(f"[QQBridge] 👁 群{gid} 近期有人发图，回复前识图...")
+            desc = self._extract_private_image(message)
+            if desc:
+                with self._groups_lock:
+                    g = self._group_buf.get(gid)
+                    if g:
+                        g.pop("last_img", None)  # 已用掉，描述已随回复进记忆
+                return desc
+            return None
+        except Exception as e:
+            print(f"[QQBridge] ⚠ 群图片识别异常: {e}")
+            return None
+
     def _note_group_chat(self, group_id, user_id, nickname, text):
         """记录某群的一条他人消息文本（活泼模式的发言素材）。
 
@@ -552,6 +608,14 @@ class QQBotBridge:
             # 「主动接话」情景与自我回顾由 chat_once 的 lively 语境注入（不进记忆）
             group_name = self._group_display_name(group_id)
             user_input = f"（{group_name}里刚才的聊天记录）\n" + topic
+            # 群图片识别：接话前检测本群最近图片（如大家在聊一张图），
+            # 识别结果作为附注并入输入（失败静默，不阻塞接话）
+            try:
+                img_desc = self._group_recent_image_desc(group_id)
+                if img_desc:
+                    user_input += f"\n（群里刚有人发了一张图片，内容大概是：{img_desc}）"
+            except Exception as e:
+                print(f"[QQBridge] ⚠ 活泼识图失败(忽略): {e}")
             reply, stickers = chat_once(
                 user_input,
                 use_sticker=self.cfg["send_sticker"],
@@ -813,6 +877,8 @@ class QQBotBridge:
             group_text = self._extract_text(message, raw_message)
             if cfg.get("lively_enabled") and cfg["allow_groups"]:
                 self._note_group_chat(group_id, user_id, nickname, group_text)
+            # 记录本条图片（供本群被 @/活泼接话回复前识图；与活泼开关无关）
+            self._note_group_image(group_id, message)
             # 群聊：仅 @丛雨 时回复；但玩法口令（galgame 开关/查看好感度）在群里免 @ 也可触发
             if not cfg["allow_groups"]:
                 return
@@ -825,7 +891,10 @@ class QQBotBridge:
             # 提取纯文本并去掉 @ 前缀后回复
             clean = self._strip_at(group_text)
             if not clean.strip():
-                return
+                # @ + 纯图片（无文字）：允许走识图回复；@ 且无图无字则忽略
+                if not self._message_has_image(message):
+                    return
+                clean = "（图片）"
             self._touch_activity()  # 被点名 → 有效对话，重置空闲计时
             # 立即占用该群活泼冷却位：被 @ 的话题即将由正常回复回答，
             # 防止活泼模式在回复前把同一话题又插嘴一次（重复回复同一问题）
@@ -847,6 +916,7 @@ class QQBotBridge:
                 "nickname": nickname,
                 "group_id": group_id,
                 "vision_desc": None,
+                "message_seg": message,  # 消息段（回复前检测本条/群近期图片用）
                 "message_id": message_id,  # 回复成功后记录，防离线补拉重复回复
             })
 
@@ -979,6 +1049,21 @@ class QQBotBridge:
                     self._mark_replied_msgs(msg)
             elif session_key.startswith("group_"):
                 user_id = msg["user_id"]
+                # 群图片识别：本条 @ 消息带图 → 优先识别本条；
+                # 否则检测本群最近 4 分钟内的图片（如"发图后 @ 评论/提问"场景），
+                # 识别结果作为附注并入发给模型的文本（失败静默，不阻塞回复）
+                img_desc = None
+                try:
+                    seg = msg.get("message_seg")
+                    if self._message_has_image(seg):
+                        print(f"[QQBridge] 👁 群{group_id} @消息带图，开始识图...")
+                        img_desc = self._extract_private_image(seg)
+                    if not img_desc:
+                        img_desc = self._group_recent_image_desc(group_id)
+                    if img_desc:
+                        text = f"{text}\n（群里有人发了一张图片，内容大概是：{img_desc}）"
+                except Exception as e:
+                    print(f"[QQBridge] ⚠ 群识图失败(忽略): {e}")
                 reply, stickers = chat_once(
                     text,
                     use_sticker=self.cfg["send_sticker"],
