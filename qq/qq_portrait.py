@@ -117,8 +117,90 @@ def _read_layer(fg_dir, prefix, layer_id):
     return img if img is not None else None
 
 
-def build_portrait(emotion: str = "") -> str:
-    """按情绪合成一张立绘 PNG，返回文件路径；失败返回空串。"""
+# 话题 → 背景搜索词（联网找背景用；未命中时用默认渐变背景）
+BG_KEYWORDS = {
+    "公园": "公园 湖 风景", "海边": "海边 沙滩 蓝天", "大海": "海边 浪花", "沙滩": "沙滩 海",
+    "夜景": "城市 夜景", "晚上": "夜景 星空", "星空": "星空 夜晚", "学校": "学校 操场",
+    "教室": "教室 黑板", "房间": "温馨 房间 窗", "卧室": "卧室 温馨", "客厅": "客厅 沙发",
+    "咖啡": "咖啡馆 下午茶", "餐厅": "餐厅 美食", "街道": "城市 街道 夜景", "城市": "城市 街景",
+    "樱花": "樱花 场景", "神社": "神社 日本", "森林": "森林 阳光", "草地": "草地 天空",
+    "天空": "蓝天 白云", "雪": "雪景 白色", "温泉": "温泉 露天", "夏日": "夏日 海滩",
+    "夏天": "夏日 蝉 绿荫", "雨": "雨景 窗", "雨天": "雨天 街道", "黄昏": "黄昏 晚霞",
+    "夕阳": "夕阳 海边", "月亮": "夜晚 月亮", "花园": "花园 花", "操场": "操场 学校",
+    "天台": "天台 天空", "山顶": "山顶 云海", "家乡": "乡村 田园", "田野": "田园 田野",
+}
+
+
+def extract_bg_kw(text: str) -> str:
+    """从对话文本粗略提取话题场景词（供立绘背景搜索）；无命中返回空串"""
+    t = text or ""
+    for k, q in BG_KEYWORDS.items():
+        if k in t:
+            return q
+    return ""
+
+
+def _default_bg(h=880, w=720):
+    """默认立绘背景：柔和竖向渐变（粉白→淡蓝），避免透明空白"""
+    top = np.array([255, 240, 248], dtype=np.float32)   # 淡粉
+    mid = np.array([240, 244, 255], dtype=np.float32)   # 淡蓝
+    grad = np.zeros((h, w, 3), dtype=np.float32)
+    for y in range(h):
+        t = y / max(1, h - 1)
+        if t < 0.6:
+            c = top + (mid - top) * (t / 0.6)
+        else:
+            c = mid + (np.array([255, 255, 255], dtype=np.float32) - mid) * ((t - 0.6) / 0.4)
+        grad[y, :, :] = c
+    bg = np.zeros((h, w, 4), dtype=np.uint8)
+    bg[..., :3] = grad.astype(np.uint8)
+    bg[..., 3] = 255
+    return bg
+
+
+def _search_bg(kw):
+    """联网找背景图 → 返回 720x880(cover 裁切) BGRA；失败返回 None"""
+    try:
+        from qq.qq_search import search_images
+        import requests as _req
+        imgs = search_images(kw + " 背景", 2) or search_images(kw, 2)
+        for im in imgs:
+            u = im.get("url")
+            if not u:
+                continue
+            try:
+                r = _req.get(u, timeout=15, headers={
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0"})
+                if r.status_code != 200 or len(r.content) < 2000:
+                    continue
+                arr = np.frombuffer(r.content, dtype=np.uint8)
+                img = cv2.imdecode(arr, cv2.IMREAD_UNCHANGED)
+                if img is None:
+                    continue
+                if img.shape[2] == 3:
+                    img = cv2.cvtColor(img, cv2.COLOR_BGR2BGRA)
+                # cover 裁切到 720x880
+                ih, iw = img.shape[:2]
+                scale = max(720.0 / iw, 880.0 / ih)
+                img = cv2.resize(img, (int(iw * scale + 0.5), int(ih * scale + 0.5)),
+                                 interpolation=cv2.INTER_AREA)
+                ih2, iw2 = img.shape[:2]
+                x0 = (iw2 - 720) // 2
+                y0 = (ih2 - 880) // 2
+                return img[y0:y0 + 880, x0:x0 + 720].copy()
+            except Exception:
+                continue
+    except Exception:
+        pass
+    return None
+
+
+def build_portrait(emotion: str = "", bg_kw: str = "") -> str:
+    """按情绪合成一张【半身】立绘 PNG（可带话题背景），返回文件路径。
+
+    - 半身：只取全身立绘的上半部分（头部+上半身）；
+    - 背景：bg_kw 提供时先联网搜索背景图合成；否则用默认柔和渐变，
+      避免 QQ 里出现透明空白背景。"""
     try:
         emo = (emotion or "").strip()
         emo_id, decor_id = EMOTION_MAP.get(emo, EMOTION_MAP.get("平静", (1292, None)))
@@ -134,25 +216,43 @@ def build_portrait(emotion: str = "") -> str:
             img = _read_layer(fg_dir, prefix, lid)
             if pos and img is not None:
                 _paste(canvas, img, pos[0], pos[1])
-        # 裁剪内容区并等比缩小（QQ 图片友好）
         alpha = canvas[..., 3]
         ys, xs = np.where(alpha > 0)
         if len(xs) == 0:
             print(f"[QQPortrait] ⚠ 合成结果为空（情绪 {emo}）")
             return ""
         x0, x1, y0, y1 = xs.min(), xs.max(), ys.min(), ys.max()
-        crop = canvas[y0:y1 + 1, x0:x1 + 1]
-        h, w = crop.shape[:2]
-        scale = min(1.0, 860.0 / h)
-        if scale < 1.0:
-            crop = cv2.resize(crop, (int(w * scale), int(h * scale)),
-                              interpolation=cv2.INTER_AREA)
+        full = canvas[y0:y1 + 1, x0:x1 + 1]
+        fh, fw = full.shape[:2]
+        # ── 半身：保留上部 ~62%（头+上半身），去掉下半身 ──
+        half_h = int(fh * 0.62)
+        half = full[:half_h, :, :].copy()
+        # ── 输出画布 720x880 ──
+        OUT_W, OUT_H = 720, 880
+        bg = _search_bg(bg_kw) if (bg_kw or "").strip() else None
+        if bg is None:
+            bg = _default_bg(OUT_H, OUT_W)
+        out = bg.copy()
+        # 人物贴到底部：等比缩放到高约 OUT_H*0.82，宽不超过 OUT_W-60
+        ph, pw = half.shape[:2]
+        target_h = int(OUT_H * 0.82)
+        scale = min(target_h / ph, (OUT_W - 60) / pw)
+        nw, nh = int(pw * scale), int(ph * scale)
+        person = cv2.resize(half, (nw, nh), interpolation=cv2.INTER_AREA)
+        px = (OUT_W - nw) // 2
+        py = OUT_H - nh - 10  # 底部留 10px
+        a = person[..., 3:4] / 255.0
+        a2 = 1.0 - a
+        reg = out[py:py + nh, px:px + nw]
+        for c in range(3):
+            reg[..., c] = (a[..., 0] * person[..., c] + a2[..., 0] * reg[..., c])
+        reg[..., 3] = np.maximum(person[..., 3], reg[..., 3])
         out_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                                "tmp")
         os.makedirs(out_dir, exist_ok=True)
-        out = os.path.join(out_dir, "qq_portrait_latest.png")
-        cv2.imencode(".png", crop)[1].tofile(out)
-        return out
+        out_p = os.path.join(out_dir, "qq_portrait_latest.png")
+        cv2.imencode(".png", out)[1].tofile(out_p)
+        return out_p
     except Exception as e:
         print(f"[QQPortrait] ⚠ 立绘合成失败: {e}")
         return ""

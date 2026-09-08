@@ -430,6 +430,16 @@ def chat_once(user_text: str, use_sticker: bool = True, vision_desc: str = None,
     except Exception:
         _fact_prefix = ""
 
+    # 自主学习：遇到问题/不认识/链接/视频分享 → 联网取参考注文（system，不写入记忆）
+    try:
+        from qq.qq_search import query_trigger as _qt, note_for_text as _nft
+        if _qt(user_text):
+            _web_note = _nft(user_text, img_desc=(vision_desc or ""))
+            if _web_note:
+                messages.append({"role": "system", "content": _web_note})
+    except Exception:
+        pass
+
     # 图片消息处理：text 为空但有 vision_desc → 用图片描述作为真实用户输入
     # （避免 [CQ:image...] 垃圾文本被当作对话内容，导致 AI 依赖历史记忆误判）
     if vision_desc:

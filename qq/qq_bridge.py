@@ -1188,6 +1188,54 @@ class QQBotBridge:
             except Exception as e:
                 print(f"[QQBridge] ⚠ 指令处理异常: {e}")
 
+            # ── 媒体收藏 / 联网搜图搜视频指令（群/私聊通用）──
+            try:
+                from qq.qq_learn import handle as _learn_handle
+                from qq.qq_learn import is_media_cmd as _is_media_cmd
+                if _is_media_cmd(text):
+                    _ctx_img = None
+                    try:
+                        from qq.qq_vision import extract_image_path as _eip
+                        _seg = msg.get("message_seg")
+                        if _seg:
+                            _ctx_img = _eip(_seg)
+                        if not _ctx_img:
+                            _ref = msg.get("img_ref") or {}
+                            _ctx_img = _eip(_ref.get("message"))
+                    except Exception:
+                        pass
+                    _lrep, _lacts = _learn_handle(text, {
+                        "cur_image_file": _ctx_img, "last_image_file": _ctx_img})
+                    if _lrep is not None:
+                        # 先执行发送动作(图/表情/视频封面)
+                        for _a in (_lacts or []):
+                            try:
+                                _at = _a.get("type")
+                                _af = _a.get("file")
+                                if _at in ("image", "sticker") and _af and os.path.exists(_af):
+                                    if session_key.startswith("private_"):
+                                        send_image(self.ws, _af, "private", int(user_id), self.self_id)
+                                    else:
+                                        send_image(self.ws, _af, "group", int(group_id), self.self_id)
+                                elif _at == "video":
+                                    if _af and os.path.exists(_af) and group_id:
+                                        send_image(self.ws, _af, "group", int(group_id), self.self_id)
+                                    _xt = _a.get("extra")
+                                    if _xt and session_key.startswith("group_"):
+                                        self._send_group_command_reply(_xt, user_id, group_id)
+                                    elif _xt:
+                                        self._send_command_reply(_xt, user_id)
+                            except Exception as _ae:
+                                print(f"[QQBridge] ⚠ 收藏发送失败: {_ae}")
+                        # 回执文本
+                        if session_key.startswith("private_"):
+                            self._send_command_reply(_lrep, user_id)
+                        else:
+                            self._send_group_command_reply(_lrep, user_id, group_id)
+                        return
+            except Exception as _le:
+                print(f"[QQBridge] ⚠ 媒体指令异常: {_le}")
+
             if session_key.startswith("private_"):
                 user_id = msg["user_id"]
                 print(f"[QQBridge] → 回复目标 private {user_id} (session={session_key})")
@@ -1284,8 +1332,8 @@ class QQBotBridge:
                 # Galgame 立绘：模型给出 [立绘:情绪] → 合成立绘发到群
                 if sent_ok and portrait_emo:
                     try:
-                        from qq.qq_portrait import build_portrait
-                        _pp = build_portrait(portrait_emo)
+                        from qq.qq_portrait import build_portrait, extract_bg_kw
+                        _pp = build_portrait(portrait_emo, extract_bg_kw(text))
                         if _pp:
                             send_image(self.ws, _pp, "group", int(group_id), self.self_id)
                             print(f"[QQBridge] 🎨 Galgame立绘({portrait_emo}) 已发送到群 {group_id}")
