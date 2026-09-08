@@ -120,11 +120,11 @@ def read_link(url):
 
 def is_link(text):
     """文本里是否含 http(s) 链接（含 b23.tv / v.kuaishou.com 等短链）"""
-    return bool(re.search(r"https?://[^\s，。、；（）\u4e00-\u9fff]+", text or ""))
+    return bool(re.search(r"https?://[^\s，。、；：！？（）<>一-鿿]+", text or ""))
 
 
 def extract_link(text):
-    m = re.search(r"https?://[^\s，。、；（）]+", text or "")
+    m = re.search(r"https?://[^\s，。、；：！？（）<>一-鿿]+", text or "")
     return m.group(0) if m else None
 
 
