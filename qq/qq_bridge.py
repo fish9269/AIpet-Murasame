@@ -421,13 +421,48 @@ class QQBotBridge:
             return False
         return any(isinstance(s, dict) and s.get("type") == "image" for s in message)
 
-    def _note_group_image(self, group_id, message):
-        """记录某群最近一张图片的消息段（供 bot 回复该群前识图注入）。
+    @staticmethod
+    def _message_has_video(message) -> bool:
+        """消息段是否含视频（仅判断类型，不下载不识别）"""
+        if not isinstance(message, list):
+            return False
+        return any(isinstance(s, dict) and s.get("type") == "video" for s in message)
 
-        只保存消息段元数据(file/url/id,体积小),识别在调度线程延迟执行;
-        与活泼模式开关无关,群里有人发图就会记,方便后续被 @ / 活泼接话时"看到"图。"""
+    def _extract_private_video(self, message, allow_ws=False):
+        """
+        提取视频并识别（下载 → 抽帧 → 视觉模型描述）。
+        与图片不同：视频文件大、抽帧耗时，URL 下载线程安全；
+        无本地文件且无 URL（file_id-only）时跳过（不占用 WS）。"""
         try:
-            if not self._message_has_image(message):
+            from qq.qq_vision import extract_video_path, describe_video, clean_vision_tmp
+            if not self._message_has_video(message):
+                return None
+            print("[QQBridge] 🎬 视频消息，开始识别...")
+            vpath = extract_video_path(message)
+            if not vpath:
+                print("[QQBridge] ⚠ 视频无本地文件且无下载 URL，跳过识别")
+                return None
+            print(f"[QQBridge] 🎬 视频文件: {vpath}")
+            desc = describe_video(vpath)
+            clean_vision_tmp()
+            # 清理下载的视频本体（帧已在 describe_video 内清理）
+            try:
+                if vpath and os.path.exists(vpath):
+                    os.remove(vpath)
+            except Exception:
+                pass
+            return desc or None
+        except Exception as e:
+            print(f"[QQBridge] ⚠ 视频识别异常: {e}")
+            return None
+
+    def _note_group_media(self, group_id, message):
+        """记录某群最近一条图片/视频消息段（供回复前识图/识视频注入）。
+
+        只保存消息段元数据(体积小)，识别在调度线程延迟执行；
+        图/视频分别记录 last_img 与 last_video，互不覆盖。"""
+        try:
+            if not isinstance(message, list):
                 return
             with self._groups_lock:
                 g = self._group_buf.setdefault(str(group_id), {
@@ -436,9 +471,13 @@ class QQBotBridge:
                     "recent": [],          # 最近若干条他人文本（带 @QQ号 硬标识）
                     "name": self._group_display_name(group_id),
                 })
-                g["last_img"] = {"t": time.time(), "message": message}
+                now = time.time()
+                if self._message_has_image(message):
+                    g["last_img"] = {"t": now, "message": message}
+                if self._message_has_video(message):
+                    g["last_video"] = {"t": now, "message": message}
         except Exception as e:
-            print(f"[QQBridge] ⚠ 记录群图片失败: {e}")
+            print(f"[QQBridge] ⚠ 记录群媒体失败: {e}")
 
     def _group_recent_image_desc(self, group_id, img_ref=None, max_age=240):
         """回复群消息前识别一张图（须在调度线程内调用；只走本地路径/URL，线程安全）。
@@ -479,6 +518,43 @@ class QQBotBridge:
             return None
         except Exception as e:
             print(f"[QQBridge] ⚠ 群图片识别异常: {e}")
+            return None
+
+    def _group_recent_video_desc(self, group_id, vid_ref=None, max_age=600):
+        """回复群消息前识别一段群视频（调度线程内调用；本地/URL 下载，线程安全）。
+
+        - vid_ref 为入队时快照（防排队期间新视频串位），None=实时取（活泼接话）；
+        - 视频比图片时效放宽到 10 分钟（大文件下载+抽帧耗时，且话题延续更久）；
+        - 识别成功仅当缓存仍是同一段视频时清理；
+        - 失败/超时/无视频一律返回 None，不阻塞正常回复。"""
+        try:
+            gid = str(group_id)
+            if vid_ref is None:
+                with self._groups_lock:
+                    g = self._group_buf.get(gid)
+                    if not g or not g.get("last_video"):
+                        return None
+                    item = g["last_video"]
+                    if time.time() - item["t"] > max_age:
+                        g.pop("last_video", None)
+                        return None
+                print(f"[QQBridge] 🎬 群{gid} 近期有人发视频，回复前识别...")
+            else:
+                item = vid_ref
+                if time.time() - item.get("t", 0) > max_age:
+                    return None
+                print(f"[QQBridge] 🎬 群{gid} 入队时快照视频，回复前识别...")
+            message = item["message"]
+            desc = self._extract_private_video(message, allow_ws=False)
+            if desc:
+                with self._groups_lock:
+                    g = self._group_buf.get(gid)
+                    if g and g.get("last_video") is item:
+                        g.pop("last_video", None)
+                return desc
+            return None
+        except Exception as e:
+            print(f"[QQBridge] ⚠ 群视频识别异常: {e}")
             return None
 
     def _note_group_chat(self, group_id, user_id, nickname, text):
@@ -619,14 +695,18 @@ class QQBotBridge:
             # 「主动接话」情景与自我回顾由 chat_once 的 lively 语境注入（不进记忆）
             group_name = self._group_display_name(group_id)
             user_input = f"（{group_name}里刚才的聊天记录）\n" + topic
-            # 群图片识别：接话前检测本群最近图片（如大家在聊一张图），
+            # 群媒体识别：接话前检测本群最近图片/视频（如大家在聊一张图/一段视频），
             # 识别结果作为附注并入输入（失败静默，不阻塞接话）
             try:
                 img_desc = self._group_recent_image_desc(group_id)
                 if img_desc:
                     user_input += f"\n（群里刚有人发了一张图片，内容大概是：{img_desc}）"
+                else:
+                    vid_desc = self._group_recent_video_desc(group_id)
+                    if vid_desc:
+                        user_input += f"\n（群里刚有人发了一段视频，内容大概是：{vid_desc}）"
             except Exception as e:
-                print(f"[QQBridge] ⚠ 活泼识图失败(忽略): {e}")
+                print(f"[QQBridge] ⚠ 活泼媒体识别失败(忽略): {e}")
             reply, stickers = chat_once(
                 user_input,
                 use_sticker=self.cfg["send_sticker"],
@@ -852,10 +932,14 @@ class QQBotBridge:
         if message_type == "private":
             # 提取纯文本
             text = self._extract_text(message, raw_message)
-            # 图片消息检测（私聊）
+            # 图片消息检测（私聊；收包线程内同步识别，与 get_image 兼容）
             vision_desc = None
             if cfg["vision_enabled"]:
                 vision_desc = self._extract_private_image(message)
+            # 视频消息检测（私聊）：文件大、抽帧耗时 → 交给调度线程识别，不阻塞收包
+            video_seg = None
+            if not vision_desc and self._message_has_video(message) and cfg.get("vision_enabled"):
+                video_seg = message
             # 语音消息识别（私聊）
             if cfg.get("stt_enabled", False):
                 try:
@@ -867,7 +951,7 @@ class QQBotBridge:
                             text = (text + " " + stt).strip() if text.strip() else stt
                 except Exception as e:
                     print(f"[QQBridge] ⚠ 语音识别异常: {e}")
-            if not text.strip() and not vision_desc:
+            if not text.strip() and not vision_desc and not video_seg:
                 return
             self._touch_activity()  # 有效对话 → 重置空闲计时
             print(f"[QQBridge] 私聊 {nickname}({user_id}): {text[:40]}")
@@ -879,6 +963,7 @@ class QQBotBridge:
                 "nickname": nickname,
                 "group_id": None,
                 "vision_desc": vision_desc,
+                "video_seg": video_seg,  # 视频消息段（调度线程内识别）
                 "message_id": message_id,  # 回复成功后记录，防离线补拉重复回复
             })
         elif message_type == "group":
@@ -888,8 +973,8 @@ class QQBotBridge:
             group_text = self._extract_text(message, raw_message)
             if cfg.get("lively_enabled") and cfg["allow_groups"]:
                 self._note_group_chat(group_id, user_id, nickname, group_text)
-            # 记录本条图片（供本群被 @/活泼接话回复前识图；与活泼开关无关）
-            self._note_group_image(group_id, message)
+            # 记录本条图片/视频（供本群被 @/活泼接话回复前识图/识视频；与活泼开关无关）
+            self._note_group_media(group_id, message)
             # 群聊：仅 @丛雨 时回复；但玩法口令（galgame 开关/查看好感度）在群里免 @ 也可触发
             if not cfg["allow_groups"]:
                 return
@@ -921,11 +1006,13 @@ class QQBotBridge:
             # 快照"此刻该群最近一张图"：回复任务在调度队列可能排队数秒~数十秒，
             # 若期间群里又有人发新图，处理时再取最新会识别成别人的图 → 入队时定格
             img_ref = None
+            vid_ref = None
             try:
                 with self._groups_lock:
                     _g = self._group_buf.get(str(group_id))
-                    if _g and _g.get("last_img"):
-                        img_ref = _g["last_img"]
+                    if _g:
+                        img_ref = _g.get("last_img")
+                        vid_ref = _g.get("last_video")
             except Exception:
                 pass
             # 入调度队列（session_key = group_<群号>_u<QQ号>：按人分仓记忆，
@@ -937,8 +1024,9 @@ class QQBotBridge:
                 "nickname": nickname,
                 "group_id": group_id,
                 "vision_desc": None,
-                "message_seg": message,  # 消息段（回复前检测本条/群近期图片用）
+                "message_seg": message,  # 消息段（回复前检测本条/群近期媒体用）
                 "img_ref": img_ref,      # 入队时刻的群最近图片快照（防识错图）
+                "vid_ref": vid_ref,      # 入队时刻的群最近视频快照
                 "message_id": message_id,  # 回复成功后记录，防离线补拉重复回复
             })
 
@@ -1060,6 +1148,19 @@ class QQBotBridge:
             if session_key.startswith("private_"):
                 user_id = msg["user_id"]
                 print(f"[QQBridge] → 回复目标 private {user_id} (session={session_key})")
+                # 私聊视频识别（调度线程内执行，避免阻塞收包；本地/URL 下载线程安全）
+                vid_desc = None
+                try:
+                    if msg.get("video_seg"):
+                        print("[QQBridge] 🎬 私聊视频消息，开始识别...")
+                        vid_desc = self._extract_private_video(msg["video_seg"], allow_ws=False)
+                except Exception as e:
+                    print(f"[QQBridge] ⚠ 私聊视频识别失败(忽略): {e}")
+                if vid_desc:
+                    if text and text.strip():
+                        text = f"{text}\n（你发来一段视频，内容大概是：{vid_desc}）"
+                    else:
+                        text = f"（你发来一段视频，内容大概是：{vid_desc}）"
                 reply, stickers = chat_once(
                     text,
                     use_sticker=self.cfg["send_sticker"],
@@ -1082,25 +1183,34 @@ class QQBotBridge:
                     self._mark_replied_msgs(msg)
             elif session_key.startswith("group_"):
                 user_id = msg["user_id"]
-                # 群图片识别：本条 @ 消息带图 → 优先识别本条；
-                # 否则识别"入队时刻"快照的群最近图片（防排队期间新图串位，识别成别人发的图）；
-                # 都没有（理论不发生，@ 任务必有快照）才实时取群最近图。
-                # 识别结果作为附注并入发给模型的文本（失败静默，不阻塞回复）
+                # 群媒体识别：本条 @ 消息带媒体 → 优先识别本条（图/视频）；
+                # 否则识别"入队时刻"快照的群最近媒体（防排队期间新内容串位）；
+                # 都没有才实时取。识别结果作为附注并入发给模型的文本（失败静默）
                 img_desc = None
+                vid_desc = None
                 try:
                     seg = msg.get("message_seg")
                     if self._message_has_image(seg):
                         print(f"[QQBridge] 👁 群{group_id} @消息带图，开始识图...")
                         # 调度线程内不能独占 ws.recv() → 只走本地路径/URL
                         img_desc = self._extract_private_image(seg, allow_ws=False)
-                    if not img_desc and msg.get("img_ref"):
+                    elif self._message_has_video(seg):
+                        print(f"[QQBridge] 🎬 群{group_id} @消息带视频，开始识别...")
+                        vid_desc = self._extract_private_video(seg, allow_ws=False)
+                    if not img_desc and not vid_desc and msg.get("img_ref"):
                         img_desc = self._group_recent_image_desc(group_id, img_ref=msg["img_ref"])
-                    if not img_desc:
+                    if not img_desc and not vid_desc and msg.get("vid_ref"):
+                        vid_desc = self._group_recent_video_desc(group_id, vid_ref=msg["vid_ref"])
+                    if not img_desc and not vid_desc:
                         img_desc = self._group_recent_image_desc(group_id)
+                    if not img_desc and not vid_desc:
+                        vid_desc = self._group_recent_video_desc(group_id)
                     if img_desc:
                         text = f"{text}\n（群里有人发了一张图片，内容大概是：{img_desc}）"
+                    elif vid_desc:
+                        text = f"{text}\n（群里有人发了一段视频，内容大概是：{vid_desc}）"
                 except Exception as e:
-                    print(f"[QQBridge] ⚠ 群识图失败(忽略): {e}")
+                    print(f"[QQBridge] ⚠ 群媒体识别失败(忽略): {e}")
                 reply, stickers = chat_once(
                     text,
                     use_sticker=self.cfg["send_sticker"],
