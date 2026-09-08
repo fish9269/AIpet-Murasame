@@ -458,7 +458,8 @@ class QQBotBridge:
                     return None
                 message = item["message"]
             print(f"[QQBridge] 👁 群{gid} 近期有人发图，回复前识图...")
-            desc = self._extract_private_image(message)
+            # 调度线程内不能独占 ws.recv() → 只走本地路径/URL(线程安全)
+            desc = self._extract_private_image(message, allow_ws=False)
             if desc:
                 with self._groups_lock:
                     g = self._group_buf.get(gid)
@@ -935,10 +936,15 @@ class QQBotBridge:
         # 无 text 段 → 过滤 CQ 码后返回（避免 [CQ:image,file=...] 被当作对话文本）
         return re.sub(r"\[CQ:[^\]]*\]", "", raw_message or "").strip()
 
-    def _extract_private_image(self, message):
+    def _extract_private_image(self, message, allow_ws=True):
         """
-        提取私聊图片并识别。
-        NapCat 的 image 段 file 常是 file_id（非本地路径）→ 用 get_image API 解析；
+        提取图片并识别。
+        NapCat 的 image 段 file 常是 file_id（非本地路径）→ 可用 get_image API 解析。
+
+        线程安全说明：get_image 需要独占 ws.recv()，只能在收包线程内调用
+        （私聊图片识别即收包线程）；群回复/活泼接话在调度线程 → allow_ws=False，
+        只走线程安全的本地路径 / 消息自带 URL 下载，file_id-only 图跳过。
+
         返回: 识别描述文本；无图片/未启用/失败 → None。
         """
         try:
@@ -946,16 +952,22 @@ class QQBotBridge:
                 extract_image_path, describe_image, clean_vision_tmp,
                 napcat_get_image, find_image_file_id,
             )
-            print("[QQBridge] 👁 私聊图片消息，开始识图...")
+            # 无图消息不跑识图（消除纯文字消息的"无法取得图片"噪音日志）
+            if not self._message_has_image(message):
+                return None
+            print("[QQBridge] 👁 图片消息，开始识图...")
             img_path = extract_image_path(message)
             stray = []
-            if not img_path and self.ws:
+            if not img_path and allow_ws and self.ws:
                 fid = find_image_file_id(message)
                 if fid:
                     print(f"[QQBridge] 👁 本地无此文件，改用 NapCat get_image: {fid}")
                     img_path, stray = napcat_get_image(self.ws, fid)
             if not img_path:
-                print("[QQBridge] ⚠ 无法取得图片（本地路径/URL/get_image 均失败），跳过识图")
+                if allow_ws:
+                    print("[QQBridge] ⚠ 无法取得图片（本地路径/URL/get_image 均失败），跳过识图")
+                else:
+                    print("[QQBridge] ⚠ 图片无本地文件且无下载 URL（file_id 需实时获取），本轮跳过识图")
                 self._replay_stray(stray)
                 return None
             print(f"[QQBridge] 👁 图片文件: {img_path}")
@@ -1057,7 +1069,8 @@ class QQBotBridge:
                     seg = msg.get("message_seg")
                     if self._message_has_image(seg):
                         print(f"[QQBridge] 👁 群{group_id} @消息带图，开始识图...")
-                        img_desc = self._extract_private_image(seg)
+                        # 调度线程内不能独占 ws.recv() → 只走本地路径/URL
+                        img_desc = self._extract_private_image(seg, allow_ws=False)
                     if not img_desc:
                         img_desc = self._group_recent_image_desc(group_id)
                     if img_desc:
