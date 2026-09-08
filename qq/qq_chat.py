@@ -442,9 +442,11 @@ def chat_once(user_text: str, use_sticker: bool = True, vision_desc: str = None,
                 if _il(user_text):
                     # 链接确实存在但内容抓取失败 → 提示模型不要编造
                     messages.append({"role": "system", "content": (
-                        "【提示】对方发来了一个链接，但本机暂时无法读取其内容"
-                        "（可能需登录或反爬拦截）。请如实告诉对方链接内容暂时无法查看，"
-                        "不要编造链接里的内容。")})
+                        "【提示】对方发来的这个链接，系统已尝试代为访问但未能提取到内容"
+                        "（该网站可能要求登录或开启了反爬）。你不需要打开任何网页："
+                        "请正常回应对方——可以说暂时没能看到链接里的内容，"
+                        "并自然地问对方链接大概是什么主题/能不能直接说说内容，"
+                        "不要编造链接里的具体内容，也不要长篇解释技术原因。")})
     except Exception:
         pass
 
@@ -484,7 +486,7 @@ def chat_once(user_text: str, use_sticker: bool = True, vision_desc: str = None,
         try:
             _g_hint = ("\n\n（当前是好感度玩法对话：如果上面这句话值得加分或扣分，"
                        "请在你回复的最后单独写一行 [好感+数字] 或 [好感-数字]，"
-                       "数字 2~8；完全中性的内容不用写。这一行不会被对方看到，会自动结算。另外，如果这句回复值得配一张角色立绘，可以在最后另写一行 [立绘:情绪词]，可选情绪词：开心/害羞/撒娇/生气/难过/委屈/惊讶/思考/疑惑/平静/严肃/叹气/得意/愣住。不要为了发而立绘，日常闲聊不用。这一行同样不会被对方看到）")
+                       "数字 2~8；完全中性的内容不用写。这一行不会被对方看到，会自动结算。另外，如果这句回复情绪很鲜明（高兴/害羞/生气/难过等），可以在 [好感] 行之后**再另起一行**写 [立绘:情绪词]（可选：开心/害羞/撒娇/生气/难过/委屈/惊讶/思考/疑惑/平静/严肃/叹气/得意/愣住；两行可以同时存在）。不要为了发而立绘，日常闲聊不用。这一行同样不会被对方看到）")
             if messages and messages[-1]["role"] == "user":
                 messages[-1]["content"] += _g_hint
             else:
@@ -560,13 +562,42 @@ def chat_once(user_text: str, use_sticker: bool = True, vision_desc: str = None,
             full_reply = re.sub(r"\[表情\s*[:：]\s*[^\]]+\]", "", full_reply).strip()
 
     # 4a2. Galgame 立绘标记 [立绘:情绪] → 发送层合成立绘图片
+    # 模型标记优先；未标记时按回复情绪词典兜底（仅限本轮好感有变化时，避免刷屏）
     portrait_emo = ""
     if _galgame_ctx:
         try:
+            # 预先解析本轮好感变化（供无标记时的立绘兜底判断，与 4b 结算一致）
+            _delta = 0
+            try:
+                for _m in re.findall(r"\[好感\s*[:：]?\s*([+-]?\d{1,3})\]", full_reply):
+                    try:
+                        _delta += int(_m)
+                    except Exception:
+                        pass
+            except Exception:
+                pass
             _pm = re.findall(r"\[立绘\s*[:：]?\s*([^\]]+)\]", full_reply)
             if _pm:
                 portrait_emo = _pm[0].strip()
                 full_reply = re.sub(r"\[立绘\s*[:：]?\s*[^\]]+\]", "", full_reply).strip()
+            else:
+                # 兜底：从回复文本里识别强情绪词（中文顺序即优先级）
+                _EMO_HINTS = (
+                    ("开心", ("开心", "好耶", "太棒", "哈哈", "嘿嘿", "高兴", "快乐", "喜欢", "耶", "嘻嘻", "真棒")),
+                    ("害羞", ("害羞", "脸红", "羞", "讨厌啦", "诶嘿嘿", "扭捏")),
+                    ("生气", ("哼", "生气", "讨厌", "可恶", "过分", "不理你", "怒")),
+                    ("难过", ("难过", "伤心", "呜", "想哭", "委屈")),
+                    ("惊讶", ("哇", "惊讶", "吓", "居然", "不会吧", "真的吗")),
+                    ("撒娇", ("撒娇", "好不好嘛", "抱抱", "要抱", "亲亲", "摸摸头")),
+                    ("思考", ("让我想想", "想了想", "思考")),
+                )
+                if _delta != 0:  # 本轮好感有变化 → 情绪鲜明，值得配图
+                    for _emo, _words in _EMO_HINTS:
+                        if any(w in full_reply for w in _words):
+                            portrait_emo = _emo
+                            break
+            if portrait_emo:
+                print(f"[QQChat] 🎨 Galgame 立绘触发: {portrait_emo}")
         except Exception:
             pass
 
