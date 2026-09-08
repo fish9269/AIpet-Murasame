@@ -2,10 +2,10 @@
 """
 Galgame 模式（好感度养成玩法，群聊）— 状态存储。
 
-- 任意群成员 @ 说「开启galgame模式」即可在该群开启；「关闭galgame模式」关闭；
-- 好感度按「群 × QQ号」分别存储，0~100，初始 50；
+- 开启按人：谁 @ 说「开启galgame模式」就只对谁生效（不会一个人开了全群生效）；
+  关闭同理只关闭自己；好感度按「群 × QQ号」分别存储，0~100，初始 50；
 - 每轮对话由模型给出 [好感±N] 标记，本模块负责 clamp + 持久化；
-- 约会玩法：成员 @ 提出约会时，按好感度 roll 成功率；
+- 约会玩法：开启者 @ 提出约会时，按好感度 roll 成功率；
   成功 +15~25 好感、失败 -15~25 好感，每人每群有 60 分钟冷却。
 状态文件：data/qq_galgame.json
 """
@@ -20,7 +20,7 @@ from tool.paths import data_path
 
 STATE_FILE = data_path("data", "qq_galgame.json")
 _lock = threading.Lock()
-_cache = None  # {"groups": {gid: {"enabled": bool, "affection": {uin: int}, "dates": {uin: ts}}}}
+_cache = None  # {"groups": {gid: {"members": {uin: {"enabled": bool}}, "affection": {uin: int}, "dates": {uin: ts}}}}
 
 # 约会判定冷却（秒）：同一人在同一群两次约会判定至少间隔 60 分钟（防刷好感）
 DATE_COOLDOWN_SEC = 3600
@@ -31,7 +31,7 @@ DATE_P_CAP = 0.90
 # 约会好感变化（大幅，区别于日常每轮 ±10 的小幅）
 DATE_DELTA_RANGE = (15, 25)
 
-_DATE_WORDS = ("约会", "约我", "约你")
+_DATE_WORDS = ("约会吧", "约会吗", "约我", "约你", "约会去", "来约会", "出去约会", "约个会", "去约会")
 
 
 def is_date_intent(text) -> bool:
@@ -78,19 +78,48 @@ def _save():
 
 def _group(gid):
     st = _load()
-    g = st["groups"].setdefault(str(gid), {"enabled": False, "affection": {}})
+    g = st["groups"].setdefault(str(gid), {"members": {}, "affection": {}})
     return g
 
 
 def group_enabled(gid) -> bool:
+    """兼容旧调用：任意成员开启过即 True（新版按人，见 member_enabled）"""
     try:
         with _lock:
-            return bool(_group(gid).get("enabled", False))
+            return bool(_group(gid).get("members")) or bool(_group(gid).get("enabled", False))
     except Exception:
         return False
 
 
+def member_enabled(gid, uin) -> bool:
+    """该成员是否在本群开启 Galgame（按人生效，互不影响）。
+
+    优先看成员自己的开关记录（可单独关闭）；无记录时兼容旧版全群开启
+    （历史 enabled=true 的群视为全员默认开启）。"""
+    try:
+        with _lock:
+            g = _group(gid)
+            m = (g.get("members") or {}).get(str(uin))
+            if m is not None:
+                return bool(m.get("enabled", False))
+            return bool(g.get("enabled", False))
+    except Exception:
+        return False
+
+
+def set_member_enabled(gid, uin, enabled: bool) -> None:
+    """开启/关闭 Galgame（只影响该成员自己）"""
+    try:
+        with _lock:
+            g = _group(gid)
+            g.setdefault("members", {})[str(uin)] = {"enabled": bool(enabled)}
+            _save()
+    except Exception as e:
+        print(f"[QQGalgame] ⚠ 切换失败: {e}")
+
+
 def set_group_enabled(gid, enabled: bool) -> None:
+    """兼容旧调用：群级开关（新版请用 set_member_enabled 按人）"""
     try:
         with _lock:
             _group(gid)["enabled"] = bool(enabled)

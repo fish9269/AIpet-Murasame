@@ -103,62 +103,69 @@ def handle_qq_command(text: str, session_key: str, user_id) -> str:
     except Exception:
         pass
 
-    # ===== Galgame 模式：群内任意成员可开关（好感度养成玩法）=====
+    # ===== Galgame 模式：按人开关（谁开启只对谁生效，不会全群开启）=====
     try:
-        _low = text.lower()
-        if "galgame" in _low or "好感度模式" in text:
+        _low2 = (text or "").lower().replace(" ", "").replace("　", "")
+        _ON = ("开启galgame模式", "打开galgame模式", "开启好感度模式", "打开好感度模式",
+               "开始galgame模式", "启动galgame模式", "开始好感度模式")
+        _OFF = ("关闭galgame模式", "关闭好感度模式", "结束galgame模式", "退出galgame模式",
+                "停止galgame模式", "取消galgame模式", "关掉galgame模式")
+        _hit_on = any(w in _low2 for w in _ON)
+        _hit_off = any(w in _low2 for w in _OFF)
+        if _hit_on or _hit_off or "galgame模式" in _low2 or "好感度模式" in _low2:
             from qq.qq_config import get_qq_config as _gq_cfg
             if not _gq_cfg().get("galgame_allowed", True):
                 return "🎮 Galgame 玩法已被停用（可在启动器「插件」页重新启用）"
-            _on = any(w in text for w in ("开启", "打开", "启动", "开始"))
-            _off = any(w in text for w in ("关闭", "关掉", "停止", "取消", "退出"))
-            if not (_on or _off):
+            if not (_hit_on or _hit_off):
                 return "跟我说「开启galgame模式」就能开始好感度养成哦~（详细玩法见 /help）"
             if not _cur_gid:
                 return "这个玩法要在群里 @我 才能玩哦~"
             _gid = _cur_gid
-            from qq.qq_galgame import set_group_enabled
-            if _on and not _off:
-                set_group_enabled(_gid, True)
-                print(f"[QQCmd] 🎮 Galgame 模式已在群 {_gid} 开启（by {user_id}）")
-                return ("🎮 Galgame 模式已开启！从现在起，和本座聊天会积累好感度："
-                        "说好话、逗本座开心会加分；冒犯、没礼貌会扣分。"
+            from qq.qq_galgame import set_member_enabled
+            if _hit_on and not _hit_off:
+                set_member_enabled(_gid, user_id, True)
+                print(f"[QQCmd] 🎮 Galgame 模式已在群 {_gid} 对 QQ{user_id} 开启")
+                return ("🎮 你的 Galgame 模式已开启！（仅对你生效，其他成员需自己说「开启galgame模式」）"
+                        "从现在起和本座聊天会积累好感度：说好话、逗本座开心会加分；冒犯、没礼貌会扣分。"
                         "好感度高了可是能解锁亲密互动甚至满足一些过分要求哦～"
-                        "（规则见 /help，说「关闭galgame模式」可结束）")
-            set_group_enabled(_gid, False)
-            print(f"[QQCmd] 🎮 Galgame 模式已在群 {_gid} 关闭（by {user_id}）")
-            return "🎮 Galgame 模式已关闭，回到普通聊天啦。"
+                        "（说「关闭galgame模式」可结束）")
+            set_member_enabled(_gid, user_id, False)
+            print(f"[QQCmd] 🎮 Galgame 模式已在群 {_gid} 对 QQ{user_id} 关闭")
+            return "🎮 你的 Galgame 模式已关闭，回到普通聊天啦。"
     except Exception:
         pass
 
-    # ===== 约会引导：群内未开启 Galgame 时给确定性提示（不依赖 AI 遵守，必现）=====
+    # ===== 约会引导：开启者未开启时给确定性提示（不依赖 AI 遵守，必现）=====
     try:
-        from qq.qq_galgame import is_date_intent as _date_int, group_enabled as _ge
+        from qq.qq_galgame import is_date_intent as _date_int, member_enabled as _me
         if _date_int(text):
             if not _cur_gid:
                 return "这个玩法要在群里 @我 才能玩哦~"
             from qq.qq_config import get_qq_config as _gq_cfg2
             if not _gq_cfg2().get("galgame_allowed", True):
                 return "🎮 Galgame 玩法已被停用（可在启动器「插件」页重新启用）"
-            if not _ge(_cur_gid):
-                return ("🎮 还没进入 Galgame 模式哦～ 先在这个群里对我说「开启galgame模式」，"
+            if not _me(_cur_gid, user_id):
+                return ("🎮 你还没开启 Galgame 模式哦～ 先在这个群里对我说「开启galgame模式」，"
                         "才能解锁好感度养成和约会玩法（玩法见 /help）")
             # 已开启：放行给 AI 的约会事件结算（此处不拦截）
     except Exception:
         pass
 
-    # ===== 好感度查询：群内 @ 说「查看好感度」（任意成员；主人永远 100）=====
+    # ===== 好感度查询：仅查询触发词且操作者本人已开启（主人永远 100）=====
     try:
-        if "好感度" in text and not any(w in text for w in ("模式", "开启", "关闭", "打开", "停止", "玩法")):
+        _low3 = (text or "").lower().replace(" ", "").replace("　", "")
+        _query = any(w in _low3 for w in ("查看好感度", "好感度多少", "好感度几分", "我的好感度",
+                                          "好感度查询", "好感度是", "好感度如何"))
+        if _query and not (_hit_on or _hit_off):
             if not _cur_gid:
                 return "在群里 @我 才能查看好感度哦~"
             _gid = _cur_gid
             from qq.qq_config import get_qq_config as _gq_cfg3
             if not _gq_cfg3().get("galgame_allowed", True):
                 return "🎮 Galgame 玩法已被停用（可在启动器「插件」页重新启用）"
-            from qq.qq_galgame import group_enabled as _g_enabled
-            if not _g_enabled(_gid):
-                return ("🎮 还没进入 Galgame 模式哦～ 在群里对我说「开启galgame模式」"
+            from qq.qq_galgame import member_enabled as _me2
+            if not _me2(_gid, user_id):
+                return ("🎮 你还没开启 Galgame 模式哦～ 在群里对我说「开启galgame模式」"
                         "就能开始好感度养成和约会玩法啦（玩法见 /help）")
             from qq.qq_memory import is_owner as _is_owner
             if _is_owner(user_id):

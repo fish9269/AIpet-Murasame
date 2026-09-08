@@ -258,6 +258,7 @@ def chat_once(user_text: str, use_sticker: bool = True, vision_desc: str = None,
     group_name: 群显示名（身份语境用；未知时 bridge 传群号兜底）
     """
     stickers = _load_sticker_names()
+    portrait_emo = ""  # [立绘:情绪] 标记(发送层合成立绘)
 
     # 1. 读取会话记忆
     history = _load_session_history(session_key)
@@ -311,16 +312,17 @@ def chat_once(user_text: str, use_sticker: bool = True, vision_desc: str = None,
             _gid = _gm2.group(1)
             _uin = str(speaker.get("uin"))
             _is_master = bool(is_master)
-            from qq.qq_galgame import group_enabled, get_affection, is_date_intent
+            from qq.qq_galgame import member_enabled, get_affection, is_date_intent
             # 插件总开关：启动器「插件」页可停用整个 Galgame 玩法
             try:
                 from qq.qq_config import get_qq_config as _gq_g
                 _gal_allowed = _gq_g().get("galgame_allowed", True)
             except Exception:
                 _gal_allowed = True
-            _galgame_on = group_enabled(_gid) and _gal_allowed
+            # 按人开启：只有开启者本人才进入玩法语境（不会别人开了连你也生效）
+            _galgame_on = member_enabled(_gid, _uin) and _gal_allowed
             if not _galgame_on and _gal_allowed:
-                # 群未开启 Galgame：若对方执行玩法动作（约会等）→ 明确提示还没进模式
+                # 对方未开启 Galgame：若执行玩法动作（约会等）→ 明确提示 ta 自己还没开启
                 try:
                     if is_date_intent(user_text):
                         messages.append({"role": "system", "content": (
@@ -464,7 +466,7 @@ def chat_once(user_text: str, use_sticker: bool = True, vision_desc: str = None,
         try:
             _g_hint = ("\n\n（当前是好感度玩法对话：如果上面这句话值得加分或扣分，"
                        "请在你回复的最后单独写一行 [好感+数字] 或 [好感-数字]，"
-                       "数字 2~8；完全中性的内容不用写。这一行不会被对方看到，会自动结算）")
+                       "数字 2~8；完全中性的内容不用写。这一行不会被对方看到，会自动结算。另外，如果这句回复值得配一张角色立绘，可以在最后另写一行 [立绘:情绪词]，可选情绪词：开心/害羞/撒娇/生气/难过/委屈/惊讶/思考/疑惑/平静/严肃/叹气/得意/愣住。不要为了发而立绘，日常闲聊不用。这一行同样不会被对方看到）")
             if messages and messages[-1]["role"] == "user":
                 messages[-1]["content"] += _g_hint
             else:
@@ -476,7 +478,7 @@ def chat_once(user_text: str, use_sticker: bool = True, vision_desc: str = None,
     from longtext.model_config import get_longtext_model_config
     mcfg = get_longtext_model_config()
     if not mcfg:
-        return "（未配置对话模型 API Key）", None
+        return "（未配置对话模型 API Key）", None, None
 
     url = mcfg["url"]
     model_name = mcfg["model"]
@@ -502,7 +504,7 @@ def chat_once(user_text: str, use_sticker: bool = True, vision_desc: str = None,
             if resp.status_code != 200:
                 err_text = resp.text[:300]
                 print(f"[QQChat] ⚠ API 错误 {resp.status_code}: {err_text}")
-                return "（AI 暂时开小差了...）", None
+                return "（AI 暂时开小差了...）", None, None
             for line in resp.iter_lines(decode_unicode=True):
                 if not line or not line.startswith("data:"):
                     continue
@@ -521,10 +523,10 @@ def chat_once(user_text: str, use_sticker: bool = True, vision_desc: str = None,
                     continue
     except Exception as e:
         print(f"[QQChat] ⚠ 请求异常: {e}")
-        return "（网络开小差了，等下再试试~）", None
+        return "（网络开小差了，等下再试试~）", None, None
 
     if not full_reply.strip():
-        return "（什么都没说出来...）", None
+        return "（什么都没说出来...）", None, None
 
     full_reply = full_reply.strip()
 
@@ -538,6 +540,17 @@ def chat_once(user_text: str, use_sticker: bool = True, vision_desc: str = None,
                 sticker_names.append(name)
         if matches:
             full_reply = re.sub(r"\[表情\s*[:：]\s*[^\]]+\]", "", full_reply).strip()
+
+    # 4a2. Galgame 立绘标记 [立绘:情绪] → 发送层合成立绘图片
+    portrait_emo = ""
+    if _galgame_ctx:
+        try:
+            _pm = re.findall(r"\[立绘\s*[:：]?\s*([^\]]+)\]", full_reply)
+            if _pm:
+                portrait_emo = _pm[0].strip()
+                full_reply = re.sub(r"\[立绘\s*[:：]?\s*[^\]]+\]", "", full_reply).strip()
+        except Exception:
+            pass
 
     # 4b. Galgame 好感度标记 [好感+N] / [好感-N] → 应用到对应群/人并从文本移除
     if _galgame_ctx:
@@ -580,4 +593,4 @@ def chat_once(user_text: str, use_sticker: bool = True, vision_desc: str = None,
     except Exception as e:
         print(f"[QQChat] 保存记忆失败: {e}")
 
-    return _reply_show, sticker_names
+    return _reply_show, sticker_names, portrait_emo

@@ -744,7 +744,7 @@ class QQBotBridge:
                         user_input += "\n" + self._media_note_sentence("video", d2, item2)
             except Exception as e:
                 print(f"[QQBridge] ⚠ 活泼媒体识别失败(忽略): {e}")
-            reply, stickers = chat_once(
+            reply, stickers, portrait_emo = chat_once(
                 user_input,
                 use_sticker=self.cfg["send_sticker"],
                 session_key=f"group_{group_id}",  # 与 @ 回复共用群记忆 → 上下文连贯
@@ -1017,7 +1017,13 @@ class QQBotBridge:
                 return
             if not self._is_at_me(message, self_id):
                 low_t = (group_text or "").lower()
-                is_cmd_txt = ("galgame模式" in low_t) or ("好感度" in group_text)
+                # 免 @ 口令收紧：只认完整指令短语，避免群里随便提到"galgame/好感度"就误触发
+                _nospace = low_t.replace(" ", "").replace("　", "")
+                _gal_phrases = (
+                    "开启galgame模式", "打开galgame模式", "关闭galgame模式",
+                    "结束galgame模式", "开启好感度模式", "关闭好感度模式",
+                    "查看好感度", "好感度多少", "我的好感度", "好感度查询", "好感度几分")
+                is_cmd_txt = any(k in _nospace for k in _gal_phrases)
                 if not is_cmd_txt:
                     return
                 print(f"[QQBridge] 玩法口令(免@): {nickname}({user_id}): {group_text[:30]}")
@@ -1198,7 +1204,7 @@ class QQBotBridge:
                         text = f"{text}\n（你发来一段视频，内容大概是：{vid_desc}）"
                     else:
                         text = f"（你发来一段视频，内容大概是：{vid_desc}）"
-                reply, stickers = chat_once(
+                reply, stickers, portrait_emo = chat_once(
                     text,
                     use_sticker=self.cfg["send_sticker"],
                     vision_desc=vision_desc,
@@ -1260,7 +1266,7 @@ class QQBotBridge:
                         text = f"{text}\n{media_note}"
                 except Exception as e:
                     print(f"[QQBridge] ⚠ 群媒体识别失败(忽略): {e}")
-                reply, stickers = chat_once(
+                reply, stickers, portrait_emo = chat_once(
                     text,
                     use_sticker=self.cfg["send_sticker"],
                     session_key=session_key,
@@ -1275,6 +1281,16 @@ class QQBotBridge:
                 sent_ok = self._send_group_reply(reply, stickers, user_id, group_id)
                 if sent_ok:
                     self._mark_replied_msgs(msg)
+                # Galgame 立绘：模型给出 [立绘:情绪] → 合成立绘发到群
+                if sent_ok and portrait_emo:
+                    try:
+                        from qq.qq_portrait import build_portrait
+                        _pp = build_portrait(portrait_emo)
+                        if _pp:
+                            send_image(self.ws, _pp, "group", int(group_id), self.self_id)
+                            print(f"[QQBridge] 🎨 Galgame立绘({portrait_emo}) 已发送到群 {group_id}")
+                    except Exception as _e:
+                        print(f"[QQBridge] ⚠ 立绘发送失败: {_e}")
                     # 已回应过当前话题 → 清空该群活泼话题缓冲并记冷却，
                     # 防止活泼模式对同一句话再插嘴一次（用户反馈"一句话被回两次"）
                     try:

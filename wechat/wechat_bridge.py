@@ -261,7 +261,7 @@ class WeChatBridge:
         # 复用 QQ 的对话封装（活动角色人设 + 分仓记忆 + 表情包选择）
         try:
             from qq.qq_chat import chat_once
-            reply, stickers = chat_once(
+            reply, stickers, _portrait_emo = chat_once(
                 text, use_sticker=True, vision_desc=vision_desc,
                 session_key=session_key,
             )
