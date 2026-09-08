@@ -1415,6 +1415,24 @@ class PCLMainWindow(QWidget):
             return False
 
     @staticmethod
+    def _desktop_qq_running() -> bool:
+        """检测桌面正式版 QQ(非 NapCat bootmain)是否在运行。
+        NapCat 注入模式与正式版 QQ 共用数据目录，两者不能同时启动。"""
+        try:
+            import subprocess as _sp
+            r = _sp.run(
+                ["powershell", "-NoProfile", "-Command",
+                 "Get-CimInstance Win32_Process -Filter \"Name='QQ.exe'\" | "
+                 "Where-Object { $_.ExecutablePath -notlike '*NapCat.Shell.Windows.OneKey*' } | "
+                 "Measure-Object | Select-Object -ExpandProperty Count"],
+                capture_output=True, text=True, timeout=10,
+                creationflags=getattr(_sp, "CREATE_NO_WINDOW", 0),
+            )
+            return r.stdout.strip() not in ("", "0")
+        except Exception:
+            return False
+
+    @staticmethod
     def _pet_api_alive():
         """桌宠 API 是否可访问（仅在点击启动时检查一次，防止同时跑两个桌宠）"""
         try:
@@ -1475,8 +1493,19 @@ class PCLMainWindow(QWidget):
         # 情况 2：启动 NapCat
         base = _app_base_dir()
 
+        # 2a. 桌面正式版 QQ 正在运行则不能启动 NapCat（NapCat 注入同一 QQ 数据目录，
+        #      会单实例冲突）→ 提示用户先关闭正式版 QQ
+        if self._desktop_qq_running():
+            self._show_config_dialog(
+                "检测到正式版 QQ 正在运行\n\n"
+                "NapCat 需要注入正式版 QQ 才能自动登录（免扫码）。\n"
+                "请先关闭桌面正式版 QQ，再点击启动。\n"
+                "（主人号可在手机 QQ 上正常使用，不受影响）")
+            return
 
-        napcat_bat = os.path.join(base, "NapCat.Shell.Windows.OneKey", "start_napcat.bat")
+        # 2b. 注入正式版 QQ 9.9.30 的官方启动脚本（NapCat 4.18.19 与 9.9.30 配套：
+        #      支持自动快速登录，重启 NapCat 无需再扫码；9.9.33 独立版不支持登录持久化）
+        napcat_bat = os.path.join(base, "NapCat.Shell.Windows.OneKey", "NapCat", "launcher-user.bat")
         if not os.path.exists(napcat_bat):
             print(f"[PCL] ⚠ 未找到 NapCat 启动脚本: {napcat_bat}")
             self._show_config_dialog("NapCat 未安装")
@@ -1500,7 +1529,7 @@ class PCLMainWindow(QWidget):
 
         # 等待期间：禁用按钮 + 更新文字，防止重复点击
         self.qq_btn.setEnabled(False)
-        self.qq_btn.setText("  ⏳ 等待 NapCat...（登录后自动继续）")
+        self.qq_btn.setText("  ⏳ 等待 NapCat...（自动登录中，首次使用需扫码）")
 
         # 异步轮询：QTimer 每秒检查一次端口（不阻塞 UI）
         self._napcat_wait_elapsed = 0
