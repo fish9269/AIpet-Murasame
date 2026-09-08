@@ -440,30 +440,40 @@ class QQBotBridge:
         except Exception as e:
             print(f"[QQBridge] ⚠ 记录群图片失败: {e}")
 
-    def _group_recent_image_desc(self, group_id, max_age=240):
-        """回复群消息前，取本群最近一张图片做识别（须在调度线程内调用）。
+    def _group_recent_image_desc(self, group_id, img_ref=None, max_age=240):
+        """回复群消息前识别一张图（须在调度线程内调用；只走本地路径/URL，线程安全）。
 
+        - img_ref 由入队时快照（该群当时最近一张图）——避免回复排队期间群里
+          又有人发新图导致"识别成别人发的图"；None 表示实时取当前最近一张
+          （活泼接话等无快照场景）；
         - 图片 4 分钟内有效（太久远不强行关联当前话题）；
-        - 识别成功即清空缓存（描述随本轮回复文本进入会话记忆，后续轮可引用）；
+        - 识别成功即清理：仅当缓存里仍是同一张图时移除（新图不误删）；
         - 失败/超时/无图一律返回 None，不阻塞正常回复。"""
         try:
             gid = str(group_id)
-            with self._groups_lock:
-                g = self._group_buf.get(gid)
-                if not g or not g.get("last_img"):
+            if img_ref is None:
+                with self._groups_lock:
+                    g = self._group_buf.get(gid)
+                    if not g or not g.get("last_img"):
+                        return None
+                    item = g["last_img"]
+                    if time.time() - item["t"] > max_age:
+                        g.pop("last_img", None)
+                        return None
+                print(f"[QQBridge] 👁 群{gid} 近期有人发图，回复前识图...")
+            else:
+                item = img_ref
+                if time.time() - item.get("t", 0) > max_age:
                     return None
-                item = g["last_img"]
-                if time.time() - item["t"] > max_age:
-                    g.pop("last_img", None)
-                    return None
-                message = item["message"]
-            print(f"[QQBridge] 👁 群{gid} 近期有人发图，回复前识图...")
+                print(f"[QQBridge] 👁 群{gid} 入队时快照图片，回复前识图...")
+            message = item["message"]
             # 调度线程内不能独占 ws.recv() → 只走本地路径/URL(线程安全)
             desc = self._extract_private_image(message, allow_ws=False)
             if desc:
                 with self._groups_lock:
                     g = self._group_buf.get(gid)
-                    if g:
+                    # 仅当缓存仍是同一张图才清除，避免误删排队期间的新图
+                    if g and g.get("last_img") is item:
                         g.pop("last_img", None)  # 已用掉，描述已随回复进记忆
                 return desc
             return None
@@ -908,6 +918,16 @@ class QQBotBridge:
                 except Exception:
                     pass
             print(f"[QQBridge] 群聊 {nickname}({user_id}) @丛雨: {clean[:40]}")
+            # 快照"此刻该群最近一张图"：回复任务在调度队列可能排队数秒~数十秒，
+            # 若期间群里又有人发新图，处理时再取最新会识别成别人的图 → 入队时定格
+            img_ref = None
+            try:
+                with self._groups_lock:
+                    _g = self._group_buf.get(str(group_id))
+                    if _g and _g.get("last_img"):
+                        img_ref = _g["last_img"]
+            except Exception:
+                pass
             # 入调度队列（session_key = group_<群号>_u<QQ号>：按人分仓记忆，
             # 跟谁聊就只带谁的上下文，防止群里不同人的对话互相串味/认错人）
             self.scheduler.enqueue({
@@ -918,6 +938,7 @@ class QQBotBridge:
                 "group_id": group_id,
                 "vision_desc": None,
                 "message_seg": message,  # 消息段（回复前检测本条/群近期图片用）
+                "img_ref": img_ref,      # 入队时刻的群最近图片快照（防识错图）
                 "message_id": message_id,  # 回复成功后记录，防离线补拉重复回复
             })
 
@@ -1062,7 +1083,8 @@ class QQBotBridge:
             elif session_key.startswith("group_"):
                 user_id = msg["user_id"]
                 # 群图片识别：本条 @ 消息带图 → 优先识别本条；
-                # 否则检测本群最近 4 分钟内的图片（如"发图后 @ 评论/提问"场景），
+                # 否则识别"入队时刻"快照的群最近图片（防排队期间新图串位，识别成别人发的图）；
+                # 都没有（理论不发生，@ 任务必有快照）才实时取群最近图。
                 # 识别结果作为附注并入发给模型的文本（失败静默，不阻塞回复）
                 img_desc = None
                 try:
@@ -1071,6 +1093,8 @@ class QQBotBridge:
                         print(f"[QQBridge] 👁 群{group_id} @消息带图，开始识图...")
                         # 调度线程内不能独占 ws.recv() → 只走本地路径/URL
                         img_desc = self._extract_private_image(seg, allow_ws=False)
+                    if not img_desc and msg.get("img_ref"):
+                        img_desc = self._group_recent_image_desc(group_id, img_ref=msg["img_ref"])
                     if not img_desc:
                         img_desc = self._group_recent_image_desc(group_id)
                     if img_desc:
