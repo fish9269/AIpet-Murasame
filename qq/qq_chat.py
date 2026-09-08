@@ -437,6 +437,14 @@ def chat_once(user_text: str, use_sticker: bool = True, vision_desc: str = None,
             _web_note = _nft(user_text, img_desc=(vision_desc or ""))
             if _web_note:
                 messages.append({"role": "system", "content": _web_note})
+            else:
+                from qq.qq_search import is_link as _il
+                if _il(user_text):
+                    # 链接确实存在但内容抓取失败 → 提示模型不要编造
+                    messages.append({"role": "system", "content": (
+                        "【提示】对方发来了一个链接，但本机暂时无法读取其内容"
+                        "（可能需登录或反爬拦截）。请如实告诉对方链接内容暂时无法查看，"
+                        "不要编造链接里的内容。")})
     except Exception:
         pass
 

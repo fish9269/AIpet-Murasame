@@ -969,6 +969,8 @@ class QQBotBridge:
         if message_type == "private":
             # 提取纯文本
             text = self._extract_text(message, raw_message)
+            # 文字+链接卡片：文本里没有 URL 时把卡片里的链接补进来（触发联网解析）
+            text = self._append_url_text(text, message)
             # 图片消息检测（私聊；收包线程内同步识别，与 get_image 兼容）
             vision_desc = None
             if cfg["vision_enabled"]:
@@ -1045,6 +1047,8 @@ class QQBotBridge:
                 else:
                     # @ 且无图无字无链接 → 忽略
                     return
+            # 文字+链接卡片：文本里没有 URL 时把卡片里的链接补进来
+            clean = self._append_url_text(clean, message)
             self._touch_activity()  # 被点名 → 有效对话，重置空闲计时
             # 立即占用该群活泼冷却位：被 @ 的话题即将由正常回复回答，
             # 防止活泼模式在回复前把同一话题又插嘴一次（重复回复同一问题）
@@ -1110,6 +1114,20 @@ class QQBotBridge:
         except Exception:
             pass
         return " ".join(out)
+
+    def _append_url_text(self, text, message):
+        """把消息段里的链接补进文本(文本已有 URL 则跳过)"""
+        try:
+            if "http" in (text or ""):
+                return text or ""
+            u = self._extract_url_seg_text(message)
+            if u:
+                base = (text or "").strip()
+                sep = chr(10)
+                return (base + sep + u[:220]).strip() if base else u[:220]
+        except Exception:
+            pass
+        return text or ""
 
     def _extract_text(self, message, raw_message):
         """
@@ -1352,6 +1370,12 @@ class QQBotBridge:
                         text = f"{text}\n{media_note}"
                 except Exception as e:
                     print(f"[QQBridge] ⚠ 群媒体识别失败(忽略): {e}")
+                # 合并消息组里若有链接卡片段（如先文字、后卡片被合并成一组）→ 补 URL 触发解析
+                try:
+                    for _sub in (msg.get("merged_msgs") or [msg]):
+                        text = self._append_url_text(text, _sub.get("message_seg"))
+                except Exception:
+                    pass
                 reply, stickers, portrait_emo = chat_once(
                     text,
                     use_sticker=self.cfg["send_sticker"],
