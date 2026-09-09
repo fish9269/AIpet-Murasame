@@ -108,6 +108,8 @@ def get_qq_config():
         "max_reply_chars": _cfg_int_min(cfg.get("qq_max_reply_chars", 0), 0, 0),
         # 对话调节：每次对话最多回复次数（0=不限；10 分钟无回复自动重置）
         "max_replies_per_conversation": _cfg_int_min(cfg.get("qq_max_replies_per_conversation", 0), 0, 0),
+        # 点歌（官方插件「点歌」开关；默认开）
+        "music_enabled": str(cfg.get("qq_music_enable", "true")).lower() == "true",
         # 自主学习（官方插件「自主学习」开关；默认开）
         "auto_learn_enable": str(cfg.get("qq_auto_learn_enable", "true")).lower() == "true",
         "auto_learn_search": str(cfg.get("qq_auto_learn_search", "true")).lower() == "true",

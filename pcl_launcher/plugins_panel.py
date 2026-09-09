@@ -541,7 +541,8 @@ class PCLPluginsPanel(QScrollArea):
 
         btn_cfg = QPushButton("⚙ 设置")
         btn_open = QPushButton("📁 打开位置")
-        btn_del = QPushButton("🗑 删除")
+        # 官方内置插件不可删除；仅第三方（我的插件）显示删除按钮
+        btn_del = None if _official else QPushButton("🗑 删除")
         small_style = f"""
             QPushButton {{ background: {Color6.name()}; color: {Color1.name()};
                 border: 1px solid {Color5.name()}; padding: {int(4*S)}px {int(8*S)}px;
@@ -549,14 +550,18 @@ class PCLPluginsPanel(QScrollArea):
                 font-family: 'Microsoft YaHei'; }}
             QPushButton:hover {{ background: {Color4.name()}; color: white; }}
         """
-        for b in (btn_cfg, btn_open, btn_del):
+        for b in (btn_cfg, btn_open):
             b.setStyleSheet(small_style)
+        if btn_del is not None:
+            btn_del.setStyleSheet(small_style)
         btn_cfg.clicked.connect(lambda: self._open_settings(meta))
         btn_open.clicked.connect(lambda: self._open_dir(meta))
-        btn_del.clicked.connect(lambda: self._delete_plugin(meta))
+        if btn_del is not None:
+            btn_del.clicked.connect(lambda: self._delete_plugin(meta))
         right.addWidget(btn_cfg)
         right.addWidget(btn_open)
-        right.addWidget(btn_del)
+        if btn_del is not None:
+            right.addWidget(btn_del)
         row.addLayout(right)
         return frame
 
@@ -584,8 +589,13 @@ class PCLPluginsPanel(QScrollArea):
             print(f"[Plugins] 打开目录失败: {e}")
 
     def _delete_plugin(self, meta):
+        if bool(meta.get("builtin", True)):
+            msg = "这是随程序自带的官方内置插件，不可删除。" + chr(10) + "不需要时可在列表里关闭它的开关即可。"
+            QMessageBox.information(self, "删除插件", msg)
+            return
         if meta.get("id") in ("auto_offline", "lively", "adult_mode", "galgame",
-                              "slang_search", "time_guard"):
+                              "slang_search", "time_guard", "auto_learning",
+                              "request_music"):
             QMessageBox.information(self, "删除插件",
                                     "这是内置插件。删除后该功能将失去管控入口："
                                     "功能类会同时被停用（config 键置 false）。\n"

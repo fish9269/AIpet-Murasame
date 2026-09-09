@@ -970,6 +970,46 @@ class QQBotBridge:
                 self._prompt_scan(force=True)
         print("[QQBridge] ❤️ 扫码恢复流程结束" + ("(已登录)" if ok else "(仍未登录，请手动处理)"))
 
+    def _play_music_worker(self, keyword, ctx):
+        """点歌线程：网易云搜索 → 下载转wav → 发record(QQ语音) → 文本回执"""
+        session_key, user_id, group_id = ctx
+        try:
+            from qq.qq_music import search as _msearch, download_wav as _mdl
+            hits = _msearch(keyword, 3)
+            if not hits:
+                self._send_music_text("没搜到《" + keyword[:30] + "》相关歌曲，换个歌名试试？", ctx)
+                return
+            hit = hits[0]
+            wav = _mdl(hit["id"])
+            if not wav:
+                self._send_music_text("歌曲下载失败（可能受版权限制），换一首试试？", ctx)
+                return
+            title = str(hit.get("name", "")) + " - " + str(hit.get("artists") or "未知")
+            try:
+                if session_key.startswith("private_"):
+                    send_voice(self.ws, wav, "private", int(user_id), self.self_id)
+                else:
+                    send_voice(self.ws, wav, "group", int(group_id), self.self_id)
+            except Exception as e:
+                print(f"[QQBridge] ⚠ 点歌语音发送失败: {e}")
+                self._send_music_text("语音发送失败，稍后再试试？", ctx)
+                return
+            self._send_music_text("🎵 已为你点播《" + title[:60] + "》", ctx)
+        except Exception as e:
+            print(f"[QQBridge] ⚠ 点歌失败: {e}")
+            self._send_music_text("点歌出了点问题，稍后再试试？", ctx)
+
+    def _send_music_text(self, text, ctx):
+        """点歌回执文本(线程内调用)"""
+        try:
+            session_key, user_id, group_id = ctx
+            if session_key.startswith("private_"):
+                self._send_command_reply(text, user_id)
+            else:
+                self._send_group_command_reply(text, user_id, group_id)
+        except Exception as e:
+            print(f"[QQBridge] ⚠ 点歌回执失败: {e}")
+
     def _napcat_token(self) -> str:
         try:
             from qq.qq_config import get_qq_config as _c

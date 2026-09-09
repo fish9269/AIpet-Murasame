@@ -218,6 +218,20 @@ def handle(text, msg_ctx=None):
         ok = saved.remove("videos", _strip(m.group(1)))
         return ("已删除视频收藏" if ok else f"没有找到「{_strip(m.group(1))}」"), []
 
+    # ── 点歌(网易云 → QQ 语音) ──
+    m = re.search(r"(?:点歌|点首|放歌|放首|唱首|来首歌|来首|搜歌)\s*[:：]?\s*(.+)", t)
+    if m:
+        kw = _strip(m.group(1)).strip("？?。！!")
+        if not kw or len(kw) < 1:
+            return "想点什么歌？对我说「点歌 晴天」试试～", []
+        try:
+            from qq.qq_config import get_qq_config as _mc
+            if not _mc().get("music_enabled", True):
+                return "点歌功能已被停用（可在启动器「插件」页开启）", []
+        except Exception:
+            pass
+        return ("🎵 正在为你搜索《" + kw[:30] + "》并点歌，请稍等～"),             [{"type": "music", "keyword": kw, "extra": None}]
+
     # ── 查看收藏 ──
     if _has_any(t, ("图列表", "图片列表", "表情列表", "视频列表", "我的收藏", "收藏列表")):
         sep = chr(10)
@@ -242,7 +256,8 @@ def is_media_cmd(text) -> bool:
                             "存图", "收藏图片", "保存这个", "这个表情", "表情包",
                             "发图", "发图片", "发表情", "发视频", "删图", "删表情",
                             "删视频", "删除表情", "删除图片", "图列表", "图片列表",
-                            "表情列表", "视频列表", "我的收藏", "收藏列表")):
+                            "表情列表", "视频列表", "我的收藏", "收藏列表",
+                            "点歌", "点首", "放歌", "放首", "唱首", "来首歌", "来首", "搜歌")):
         return True
     # 搜索意图 + 对象（模糊）
     has_search = any(k in n for k in ("搜索", "搜图", "搜个", "搜张", "搜一下", "帮我搜",
