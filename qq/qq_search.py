@@ -156,26 +156,29 @@ def search_images(query, num=3):
 
 
 def search_videos(query, num=3):
-    """视频搜索（必应视频，尽力解析）→ [{title, url, dur}]；失败返回 []
-    注意：网页结果多为跳转链接，收藏视频以「标题+链接+封面」形式保存。"""
+    """bilibili 搜索视频 → [{bvid, title, author, play, cover, url}]；失败返回 []
+    使用 wbi 搜索接口（无需登录签名），网页直链可收藏/发送。"""
     out = []
     try:
-        url = "https://cn.bing.com/videos/search?q=" + urllib.parse.quote(query) + "&mkt=zh-CN"
-        r = _get(url, headers={"Referer": "https://cn.bing.com/"})
+        import urllib.parse as _up2
+        url = ("https://api.bilibili.com/x/web-interface/wbi/search/type"
+               "?search_type=video&keyword=" + _up2.quote(query))
+        r = _get(url, headers={"Referer": "https://www.bilibili.com/"}, timeout=8)
         if not r:
             return out
-        h = r.text
-        titles = re.findall(r'<a[^>]+class="[^"]*vtitle[^"]*"[^>]*title="([^"]+)"', h)
-        if not titles:
-            titles = re.findall(r'title="([^"]{4,90})"[^>]*class="[^"]*vtitle', h)
-        hrefs = re.findall(r'<a[^>]+class="[^"]*vtitle[^"]*"[^>]*href="([^"]+)"', h)
-        durs = re.findall(r'<span class="dur"[^>]*>(.*?)</span>', h)
-        for i in range(min(num, len(titles))):
-            u = hrefs[i] if i < len(hrefs) else ""
-            if u and not u.startswith("http"):
-                u = "https://cn.bing.com" + u
-            out.append({"title": _clean(titles[i]), "url": u,
-                        "dur": _clean(durs[i]) if i < len(durs) else ""})
+        j = r.json()
+        results = ((j.get("data") or {}).get("result")) or []
+        for v in results[:num]:
+            if not isinstance(v, dict) or not v.get("bvid"):
+                continue
+            out.append({
+                "bvid": v.get("bvid", ""),
+                "title": (v.get("title") or "").replace('<em class="keyword">', "").replace("</em>", ""),
+                "author": v.get("author", ""),
+                "play": str(v.get("play", "0")),
+                "cover": v.get("pic", ""),
+                "url": f"https://www.bilibili.com/video/{v.get('bvid','')}",
+            })
     except Exception:
         pass
     return out

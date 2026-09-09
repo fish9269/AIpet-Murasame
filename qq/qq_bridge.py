@@ -1032,6 +1032,13 @@ class QQBotBridge:
                     "查看好感度", "好感度多少", "我的好感度", "好感度查询", "好感度几分")
                 is_cmd_txt = any(k in _nospace for k in _gal_phrases)
                 if not is_cmd_txt:
+                    # 媒体收藏/搜图类口语指令同样免 @ 放行（词较特定，误触发风险低）
+                    try:
+                        from qq.qq_learn import is_media_cmd as _imc2
+                        is_cmd_txt = _imc2(group_text)
+                    except Exception:
+                        pass
+                if not is_cmd_txt:
                     return
                 print(f"[QQBridge] 玩法口令(免@): {nickname}({user_id}): {group_text[:30]}")
             # 提取纯文本并去掉 @ 前缀后回复

@@ -78,6 +78,8 @@ def _try_del_file(p):
 
 def _download(url, dst_dir, ext_hint=".jpg"):
     try:
+        if url.startswith("//"):
+            url = "https:" + url
         r = requests.get(url, timeout=20, headers={
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0",
             "Referer": "https://www.bilibili.com/"})
