@@ -15,6 +15,7 @@ QQ 自主学习 & 媒体收藏指令处理（在调度线程内执行）。
   {"type": "image"/"sticker"/"video", "file": 路径, "extra": 附文文本 或 None}
 """
 
+import os
 import re
 
 from qq import qq_saved as saved
