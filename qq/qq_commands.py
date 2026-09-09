@@ -277,7 +277,7 @@ def handle_qq_command(text: str, session_key: str, user_id) -> str:
         lines.append("· 看到表情/图片后说「保存表情」/「保存这张图」→ 收藏")
         lines.append("· 发图 名字 / 发表情 名字 / 发视频 名字 → 发送收藏")
         lines.append("· 删图 名字 / 删表情 名字 → 删除收藏；图列表 / 我的收藏 → 查看（含用法示例）")
-        lines.append("（以上媒体指令在群里可直接说，不用 @我）")
+        lines.append("（媒体指令在群里要先 @我再说）")
         return "\n".join(lines)
 
     # /switch — 切换长文本模型（仅主人白名单）
