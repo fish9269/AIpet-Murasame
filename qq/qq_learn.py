@@ -121,9 +121,9 @@ def handle(text, msg_ctx=None):
                 f"（{len(saved.names(kind))}/10）{extra}。"
                 f"删除说「{'删表情' if want_sticker else '删图'} {item['name']}」"), []
 
-    # 搜索意图但没带关键词(如"帮我搜索这个视频"无具体内容) → 引导说法
-    if _save_intent is not None or (_obj in ("video", "image", "sticker")
-                                    and any(k in t for k in ("搜", "找", "查", "搜索"))):
+    # 搜索引导：仅当文本确实含"搜/找/查/搜索"字样且没带关键词时引导
+    #（注意不要劫持"点歌/放歌"等其它指令）
+    if _obj in ("video", "image", "sticker")             and any(k in t for k in ("搜", "找", "查", "搜索")):
         _has_content = bool(re.search(r"(?:搜图|搜索图片|搜图片|找图片|搜视频|搜索视频|搜个视频|搜段视频|看视频)\s*[:：]?\s*\S+", t))
         if not _has_content:
             obj_word = {"video": "视频", "image": "图片", "sticker": "表情"}.get(_obj, "")
@@ -138,9 +138,11 @@ def handle(text, msg_ctx=None):
         if not kw:
             return "想搜什么图？对我说「搜图 猫咪」试试", []
         from qq.qq_search import search_images
-        imgs = search_images(kw, 3)
+        import random as _rnd
+        imgs = search_images(kw, 5)
         if not imgs:
             return f"没搜到「{kw}」的图片，换个关键词试试？", []
+        _rnd.shuffle(imgs)  # 随机挑选，同关键词每次也能得到不同图
         item = None
         for im in imgs:
             item = saved.add_image(url=im["url"], name=kw[:12])

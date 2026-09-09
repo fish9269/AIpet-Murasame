@@ -993,11 +993,22 @@ class QQBotBridge:
             except Exception as e:
                 print(f"[QQBridge] ⚠ 点歌语音发送失败: {e}")
                 self._send_music_text("语音发送失败，稍后再试试？", ctx)
+                self._del_wav(wav)
                 return
+            self._del_wav(wav)  # 发送完成后清理临时音频，不残留文件
             self._send_music_text("🎵 已为你点播《" + title[:60] + "》", ctx)
+
         except Exception as e:
             print(f"[QQBridge] ⚠ 点歌失败: {e}")
             self._send_music_text("点歌出了点问题，稍后再试试？", ctx)
+
+    def _del_wav(self, wav):
+        """清理点歌临时音频"""
+        try:
+            if wav and os.path.exists(wav):
+                os.remove(wav)
+        except Exception:
+            pass
 
     def _send_music_text(self, text, ctx):
         """点歌回执文本(线程内调用)"""
