@@ -962,8 +962,10 @@ class PCLSettingsPanel(QWidget):
 
             # 重启桌宠
             self._restart_pet()
+            show_save_toast(True)
         except Exception as e:
             print(f"[PCL] 保存配置失败: {e}")
+            show_save_toast(False)
 
     def _get_text(self, key):
         w = self._widgets.get(key)
@@ -2379,3 +2381,30 @@ class PCLPromptEditor(QWidget):
             self.lbl_status.setText("✅ 已保存")
         except Exception as e:
             self.lbl_status.setText(f"保存失败: {e}")
+
+def show_save_toast(ok: bool, text: str = ""):
+    """屏幕中央弹出"保存成功/保存失败"提示，约 1.8 秒自动消失"""
+    try:
+        from PyQt5.QtWidgets import QApplication, QLabel
+        from PyQt5.QtCore import Qt, QTimer
+        app = QApplication.instance()
+        if app is None:
+            return
+        scr = app.primaryScreen().availableGeometry()
+        lab = QLabel(None)
+        lab.setWindowFlags(Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint
+                           | Qt.Tool | Qt.WindowDoesNotAcceptFocus)
+        lab.setAttribute(Qt.WA_TranslucentBackground)
+        bg = "rgba(46,125,50,235)" if ok else "rgba(211,47,47,235)"
+        lab.setStyleSheet(f"background:{bg};color:white;border-radius:10px;"
+                          "padding:12px 26px;font-size:16px;font-family:'Microsoft YaHei';")
+        lab.setText(text or ("✅ 保存成功" if ok else "❌ 保存失败"))
+        lab.adjustSize()
+        lab.move(scr.center().x() - lab.width() // 2,
+                 scr.center().y() - lab.height() // 2)
+        lab.show()
+        lab.raise_()
+        QTimer.singleShot(1900, lab.close)
+        QTimer.singleShot(2500, lab.deleteLater)
+    except Exception:
+        pass

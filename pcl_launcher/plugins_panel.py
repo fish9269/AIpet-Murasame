@@ -54,15 +54,30 @@ def _load_config():
         return {}
 
 
-def _save_config(cfg):
+def _save_config(cfg, toast=True):
+    """写配置；toast=True 时在屏幕中央弹保存成功/失败提示"""
     try:
         p = _config_path()
         tmp = p + ".tmp"
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump(cfg, f, ensure_ascii=False, indent=2)
         os.replace(tmp, p)
+        if toast:
+            try:
+                from pcl_launcher.widgets import show_save_toast
+                show_save_toast(True)
+            except Exception:
+                pass
+        return True
     except Exception as e:
         print(f"[Plugins] 保存配置失败: {e}")
+        if toast:
+            try:
+                from pcl_launcher.widgets import show_save_toast
+                show_save_toast(False)
+            except Exception:
+                pass
+        return False
 
 
 def _bool_of(value, default=False) -> bool:

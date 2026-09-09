@@ -269,6 +269,9 @@ class QQBotBridge:
         self._health_fail = 0              # 连续失败次数
         self._last_recover_ts = 0.0        # 上次自动重启 NapCat 时间（冷却防循环）
         self._last_scan_hint_ts = 0.0      # 上次扫码提示时间（防刷屏）
+        # ===== 自主学习（官方插件）限流状态 =====
+        self._learn_media_ts = {}   # gid -> 上次学习群媒体时间
+        self._learn_link_ts = {}    # gid -> 上次学习链接时间
 
         # ===== 对话调节（设置 → QQ配置）=====
         # （单条回复条数/字数限制见 _reply_limits/_cap_reply 与发送层 cap_clauses_count；
@@ -546,6 +549,81 @@ class QQBotBridge:
             return f"{master_tag}@{who}"
         except Exception:
             return ""
+
+    # ================= 自主学习（官方插件）辅助 =================
+    def _maybe_learn_group_link(self, group_id, user_id, nickname, text):
+        """群链接学习：打开链接提取内容入库(每群 5 分钟限流, 异步)"""
+        import urllib.parse as _up
+        m_url = None
+        try:
+            import re as _re
+            m_url = _re.search(r"https?://[^\s，。、；：！？（）<一-鿿]+", text)
+        except Exception:
+            return
+        if not m_url:
+            return
+        now = time.time()
+        if now - self._learn_link_ts.get(str(group_id), 0) < 300:
+            return
+        self._learn_link_ts[str(group_id)] = now
+        url = m_url.group(0)
+        import threading as _th
+        _th.Thread(target=self._learn_link_worker, args=(group_id, user_id, nickname, url),
+                   daemon=True).start()
+
+    def _learn_link_worker(self, group_id, user_id, nickname, url):
+        try:
+            from qq.qq_search import read_link
+            from qq.qq_learnstore import add_link
+            info = read_link(url) or ""
+            title = ""
+            for line in (info or "").split(chr(10)):
+                if line.startswith("【链接·"):
+                    title = line
+                    break
+            add_link(group_id, f"{nickname}({user_id})", title or url[:60], url, info[:200])
+            print(f"[QQBridge] 🧠 已学习群链接: {url[:60]}")
+        except Exception:
+            pass
+
+    def _maybe_learn_group_media(self, group_id, user_id, nickname, message):
+        """群图片/视频学习：异步识别入库(图片每群10分钟限流2次, 视频每15分钟1次)"""
+        if not self._message_has_image(message) and not self._message_has_video(message):
+            return
+        now = time.time()
+        key = str(group_id)
+        rec = self._learn_media_ts.get(key, [0, 0])  # [图片次数时间, 视频时间]
+        try:
+            if self._message_has_video(message):
+                if now - float(rec[1]) < 900:
+                    return
+                rec[1] = now
+                self._learn_media_ts[key] = rec
+            else:
+                if now - float(rec[0]) < 300:
+                    return
+                rec[0] = now
+                self._learn_media_ts[key] = rec
+        except Exception:
+            pass
+        import threading as _th
+        _th.Thread(target=self._learn_media_worker,
+                   args=(group_id, user_id, nickname, message), daemon=True).start()
+
+    def _learn_media_worker(self, group_id, user_id, nickname, message):
+        try:
+            from qq.qq_learnstore import add_media
+            if self._message_has_video(message):
+                desc = self._extract_private_video(message, allow_ws=False) or ""
+                kind = "video"
+            else:
+                desc = self._extract_private_image(message, allow_ws=False) or ""
+                kind = "image"
+            if desc:
+                add_media(group_id, f"{nickname}({user_id})", kind, desc)
+                print(f"[QQBridge] 🧠 已学习群{kind}: {desc[:40]}")
+        except Exception:
+            pass
 
     def _group_recent_image_desc(self, group_id, img_ref=None, max_age=240):
         """回复群消息前识别一张图（须在调度线程内调用；只走本地路径/URL，线程安全）。
@@ -1269,6 +1347,20 @@ class QQBotBridge:
                 self._note_group_chat(group_id, user_id, nickname, group_text)
             # 记录本条图片/视频（含发送者身份：回复前识图/识视频附注谁发的）
             self._note_group_media(group_id, message, user_id=user_id, nickname=nickname)
+            # 自主学习(官方插件)：群对话/链接/媒体学习(异步、限流，不阻塞收包)
+            try:
+                from qq.qq_config import get_qq_config as _lcfg
+                _lc = _lcfg()
+                if _lc.get("auto_learn_enable"):
+                    if _lc.get("auto_learn_chats") and group_text.strip():
+                        from qq.qq_learnstore import add_chat as _achat
+                        _achat(group_id, f"{nickname}({user_id})", group_text)
+                    if _lc.get("auto_learn_links") and "http" in group_text:
+                        self._maybe_learn_group_link(group_id, user_id, nickname, group_text)
+                    if _lc.get("auto_learn_media"):
+                        self._maybe_learn_group_media(group_id, user_id, nickname, message)
+            except Exception:
+                pass
             # 群聊：仅 @丛雨 时回复；但玩法口令（galgame 开关/查看好感度）在群里免 @ 也可触发
             if not cfg["allow_groups"]:
                 return

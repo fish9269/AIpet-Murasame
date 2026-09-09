@@ -430,18 +430,38 @@ def chat_once(user_text: str, use_sticker: bool = True, vision_desc: str = None,
     except Exception:
         _fact_prefix = ""
 
-    # 自主学习：链接/提问 → 联网参考直接并入用户消息前缀（醒目且入记忆，便于追问）
+    # 自主学习（官方插件，可在启动器插件页调开关）：问题联网搜索 + 群学习库检索
     try:
-        from qq.qq_search import note_for_text as _nft2
-        _web_note = _nft2(user_text, img_desc=(vision_desc or ""))
-        if _web_note:
-            _fact_prefix += _web_note + "\n"
-        else:
-            from qq.qq_search import is_link as _il2
-            if _il2(user_text):
-                _fact_prefix += ("【链接提示】系统已尝试代为打开该链接但未能提取到内容"
-                                 "（网站可能要登录或开启了反爬）。你不需要打开任何网页，"
-                                 "请如实说暂时没看到内容并请对方直接说说大概是什么，不要编造。\n")
+        from qq.qq_config import get_qq_config as _alcfg
+        _alc = _alcfg()
+        if _alc.get("auto_learn_enable"):
+            if _alc.get("auto_learn_search"):
+                from qq.qq_search import note_for_text as _nft2
+                _web_note = _nft2(user_text, img_desc=(vision_desc or ""))
+                if _web_note:
+                    _fact_prefix += _web_note + chr(10)
+                else:
+                    from qq.qq_search import is_link as _il2
+                    if _il2(user_text):
+                        _fact_prefix += ("【链接提示】系统已尝试代为打开该链接但未能提取到内容"
+                                         "（网站可能要登录或开启了反爬）。你不需要打开任何网页，"
+                                         "请如实说暂时没看到内容并请对方直接说说大概是什么，不要编造。"
+                                         + chr(10))
+            # 群学习库检索：问题相关(图/视频/链接/群聊内容)作为参考
+            if _alc.get("auto_learn_media") or _alc.get("auto_learn_links")                     or _alc.get("auto_learn_chats"):
+                import re as _re3
+                _gid3 = None
+                try:
+                    _mm3 = _re3.match(r"^(?:private_|group_)(\d+)", str(session_key or ""))
+                    if _mm3:
+                        _gid3 = _mm3.group(1)
+                except Exception:
+                    pass
+                if user_text and len(user_text) <= 120:
+                    from qq.qq_learnstore import retrieve as _lr
+                    _notes = _lr(user_text, gid=_gid3)
+                    if _notes:
+                        _fact_prefix += "【群学习参考】" + chr(10).join(_notes) + chr(10)
     except Exception:
         pass
 
