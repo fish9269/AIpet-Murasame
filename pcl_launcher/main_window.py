@@ -1493,9 +1493,19 @@ class PCLMainWindow(QWidget):
         # 情况 2：启动 NapCat
         base = _app_base_dir()
 
-        # 使用 NapCat 自带 9.9.33 独立版（bootmain + 独立 QQData 目录）：
-        # 与桌面正式版 QQ 彻底隔离、可同时运行（代价：重启 NapCat 需扫码一次）
-        napcat_bat = os.path.join(base, "NapCat.Shell.Windows.OneKey", "start_napcat.bat")
+        # 2a. 桌面正式版 QQ(9.9.30)正在运行会与 NapCat(注入同一 9.9.30)互斥
+        #     → 提示用户先关闭正式版 QQ（主人号用手机 QQ）
+        if self._desktop_qq_running():
+            self._show_config_dialog(
+                "检测到正式版 QQ 正在运行\n\n"
+                "NapCat 需要独占 QQ 9.9.30 才能自动登录（免扫码）。\n"
+                "请先关闭桌面正式版 QQ，再点击启动。\n"
+                "（主人号可在手机 QQ 上正常使用，不受影响）")
+            return
+
+        # 2b. 注入正式版 QQ 9.9.30（NapCat 4.18.19 配套版本：登录态正常落盘，
+        #      重启自动快速登录、无需扫码；9.9.33 独立版不支持登录持久化）
+        napcat_bat = os.path.join(base, "NapCat.Shell.Windows.OneKey", "NapCat", "launcher-user.bat")
         if not os.path.exists(napcat_bat):
             print(f"[PCL] ⚠ 未找到 NapCat 启动脚本: {napcat_bat}")
             self._show_config_dialog("NapCat 未安装")
@@ -1519,7 +1529,7 @@ class PCLMainWindow(QWidget):
 
         # 等待期间：禁用按钮 + 更新文字，防止重复点击
         self.qq_btn.setEnabled(False)
-        self.qq_btn.setText("  ⏳ 等待 NapCat...（登录后自动继续）")
+        self.qq_btn.setText("  ⏳ 等待 NapCat...（自动登录中）")
 
         # 异步轮询：QTimer 每秒检查一次端口（不阻塞 UI）
         self._napcat_wait_elapsed = 0
