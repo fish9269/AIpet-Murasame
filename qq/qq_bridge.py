@@ -1275,7 +1275,24 @@ class QQBotBridge:
                             try:
                                 _at = _a.get("type")
                                 _af = _a.get("file")
-                                if _at in ("image", "sticker") and _af and os.path.exists(_af):
+                                if _at == "video_file" and _af and os.path.exists(_af):
+                                    # 发送本地视频文件(与图片同机制, NapCat 读本地路径)
+                                    _tgt = int(user_id) if session_key.startswith("private_") else int(group_id)
+                                    _mtype = "private" if session_key.startswith("private_") else "group"
+                                    try:
+                                        self.ws.send(json.dumps({
+                                            "action": "send_msg",
+                                            "params": {
+                                                "message_type": _mtype,
+                                                "user_id" if _mtype == "private" else "group_id": _tgt,
+                                                "message": [{"type": "video", "data": {"file": _af}}],
+                                            },
+                                            "echo": f"sendvid_{uuid.uuid4().hex[:8]}",
+                                        }, ensure_ascii=False))
+                                        print(f"[QQBridge] 🎬 发送视频: {os.path.basename(_af)}")
+                                    except Exception as _ve:
+                                        print(f"[QQBridge] ⚠ 发送视频失败: {_ve}")
+                                elif _at in ("image", "sticker") and _af and os.path.exists(_af):
                                     if session_key.startswith("private_"):
                                         send_image(self.ws, _af, "private", int(user_id), self.self_id)
                                     else:

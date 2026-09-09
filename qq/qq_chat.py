@@ -350,7 +350,7 @@ def chat_once(user_text: str, use_sticker: bool = True, vision_desc: str = None,
                     # 主人：好感恒 100 不增减，但同样显示状态提示（让主人知道在模式里）
                     messages.append({"role": "system", "content": (
                         f"【Galgame 模式·好感度】正在和你说话的是你的主人 @{speaker.get('nick') or '主人'}"
-                        f"(QQ {_uin})。主人对本座的好感恒定为 100/100，不会增减。"
+                        f"(QQ {_uin})。本座对主人的好感恒定为 100/100，不会增减。"
                         "你可以尽情撒娇甜蜜、亲密互动。若 ta 这句话让你心动，可在回复末尾附"
                         " [好感+数字]（仅作状态显示，不会真的变化）；中性内容可不写。保持丛雨人设。"
                     )})
@@ -358,7 +358,7 @@ def chat_once(user_text: str, use_sticker: bool = True, vision_desc: str = None,
                     messages.append({"role": "system", "content": (
                         f"【Galgame 模式·好感度养成】正在和你对话的是普通群友 @{speaker.get('nick') or 'ta'}"
                         f"(QQ {_uin})，不是你的主人，用 ta 的昵称称呼即可。\n"
-                        f"- ta 当前对你的好感度：{_aff} / 100（初始 50）。\n"
+                        f"- 本座对 ta 的好感度：{_aff} / 100（初始 50）。\n"
                         f"- 关系档位：{_tier}。\n"
                         "【好感度判定——每一轮对话都必须执行】根据 ta 说的这句话，在回复的**末尾**附上标记：\n"
                         "· 夸奖、关心、有趣、体贴、哄你开心 → [好感+N]，N 取 2~8（越讨你喜欢越高）\n"

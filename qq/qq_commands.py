@@ -169,7 +169,7 @@ def handle_qq_command(text: str, session_key: str, user_id) -> str:
                         "就能开始好感度养成和约会玩法啦（玩法见 /help）")
             from qq.qq_memory import is_owner as _is_owner
             if _is_owner(user_id):
-                return "❤️ 主人对本座的好感度当然是永远的 100 分啦～你可是本座最重要的人！"
+                return "❤️ 本座对主人的好感度当然是永远的 100 分啦～你可是本座最重要的人！"
             from qq.qq_galgame import get_affection as _get_aff
             _aff = _get_aff(_gid, user_id)
             if _aff >= 90:
@@ -182,7 +182,7 @@ def handle_qq_command(text: str, session_key: str, user_id) -> str:
                 _tier = "🧊 冷淡级……本座暂时不太想理你"
             else:
                 _tier = "💢 讨厌级！离本座远一点！"
-            return f"🎮 你当前对我的好感度：{_aff} / 100\n{_tier}"
+            return f"🎮 本座对你的好感度：{_aff} / 100\n{_tier}"
     except Exception:
         pass
 
@@ -263,8 +263,21 @@ def handle_qq_command(text: str, session_key: str, user_id) -> str:
         lines.append("· 好感 ≥70 可亲密互动（撒娇、抱抱…）；≥90 可满足较过分的要求（会扣好感）")
         lines.append("· 好感 <50 时亲密和过分要求会被本座拒绝哦")
         lines.append("· 💕 约会玩法：对我说「和我约会吧」可以约会——成功大加好感(+15~25)，失败会扣大额好感；好感越高越容易成功，每次约会间隔 60 分钟")
-        lines.append("· 📊 对我说「查看好感度」可随时查看自己当前的好感度")
+        lines.append("· 📊 对我说「查看好感度」可查看本座对你的好感度（初始50，0~100）")
         lines.append("· 说「关闭galgame模式」结束玩法")
+        lines.append("")
+        lines.append("🌐 自主学习：")
+        lines.append("· 发链接给我（网页/B站/快手等）→ 我会打开看内容再回复")
+        lines.append("· 问「搜索/查一下/帮我查 xxx」「这是什么/不懂/不认识」→ 我会联网搜索答案")
+        lines.append("· 图片不认识 → 发图问我「这是什么」即可")
+        lines.append("")
+        lines.append("🖼 媒体收藏（图片/表情/视频各最多10个，满了自动替换最旧）：")
+        lines.append("· 搜图 猫咪 → 联网搜图并保存+发给你")
+        lines.append("· 搜视频 猫 搞笑 → 搜索并直接下载发送视频")
+        lines.append("· 看到表情/图片后说「保存表情」/「保存这张图」→ 收藏")
+        lines.append("· 发图 名字 / 发表情 名字 / 发视频 名字 → 发送收藏")
+        lines.append("· 删图 名字 / 删表情 名字 → 删除收藏；图列表 / 我的收藏 → 查看（含用法示例）")
+        lines.append("（以上媒体指令在群里可直接说，不用 @我）")
         return "\n".join(lines)
 
     # /switch — 切换长文本模型（仅主人白名单）

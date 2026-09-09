@@ -20,6 +20,55 @@ import re
 from qq import qq_saved as saved
 
 
+def bilibili_download(bvid, max_bytes=70 * 1024 * 1024, max_dur=600):
+    """下载 B站视频(默认 480P, 超限降 360P)。返回 (本地路径, 标题)；失败返回 (None, 原因)"""
+    import os as _os, requests as _req, time as _t
+    _UA = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0",
+           "Referer": "https://www.bilibili.com/"}
+    try:
+        r = _req.get("https://api.bilibili.com/x/web-interface/view?bvid=" + bvid,
+                     headers=_UA, timeout=10)
+        j = r.json()
+        d = j.get("data") or {}
+        cid = d.get("cid")
+        title = d.get("title") or bvid
+        if not cid:
+            return None, "视频信息获取失败"
+        if int(d.get("duration") or 0) > max_dur:
+            return None, "视频时长过长"
+        path = None
+        for qn in (64, 32):
+            r2 = _req.get(
+                "https://api.bilibili.com/x/player/playurl?bvid=%s&cid=%s&qn=%d&fnval=1" % (bvid, cid, qn),
+                headers=_UA, timeout=10)
+            du = ((r2.json().get("data") or {}).get("durl") or [])
+            if not du:
+                continue
+            u = du[0].get("url", "")
+            try:
+                size = int(du[0].get("size") or 0)
+            except Exception:
+                size = 0
+            if size > max_bytes:
+                continue
+            with _req.get(u, headers=_UA, timeout=20, stream=True) as rr:
+                if rr.status_code != 200:
+                    continue
+                base = os.path.dirname(os.path.abspath(__file__))
+                d_dir = os.path.join(base, "..", "data", "qq_saved_media", "videos")
+                os.makedirs(d_dir, exist_ok=True)
+                path = os.path.join(d_dir, "bili_%s_%d.mp4" % (bvid, _t.time()))
+                with open(path, "wb") as f:
+                    for chunk in rr.iter_content(65536):
+                        f.write(chunk)
+                break
+        if not path or not os.path.exists(path):
+            return None, "视频下载失败（可能需登录或清晰度被限制）"
+        return path, title
+    except Exception as e:
+        return None, "下载出错: " + str(e)
+
+
 def _strip(text):
     return (text or "").strip()
 
@@ -77,7 +126,7 @@ def handle(text, msg_ctx=None):
         return (f"已按「{kw}」搜到并保存图片「{item['name']}」"
                 f"（{len(saved.names('images'))}/10），这就发给你看～"), acts
 
-    # ── 搜视频并保存 ──
+    # ── 搜视频并直接下载发送 ──
     m = re.search(r"(?:搜视频|搜索视频|找视频)\s*[:：]?\s*(.+)", t)
     if m:
         kw = _strip(m.group(1)).strip("？?。")
@@ -86,14 +135,17 @@ def handle(text, msg_ctx=None):
         from qq.qq_search import search_videos
         vids = search_videos(kw, 3)
         if not vids:
-            return f"没搜到「{kw}」的视频，试试发一个 B站/快手链接给我，我帮你看内容～", []
+            return "没搜到「" + kw + "」的视频，试试直接发 B站/快手链接给我", []
         v = vids[0]
-        item = saved.add_video(v["title"][:16], v["url"], title=v["title"])
+        path, title = bilibili_download(v["bvid"])
+        if not path:
+            return "视频「" + (v.get("title") or "")[:30] + "」" + title + "（可换关键词或直接发链接）", []
+        item = saved.add_video((v.get("title") or "")[:16], v["url"],
+                               title=title or v.get("title"), file=path)
         if not item:
             return "视频保存失败", []
-        return (f"已保存视频「{item['name']}」：{v['title'][:60]}"
-                f"{('（' + v['dur'] + '）') if v.get('dur') else ''}"
-                f"\n链接：{v['url']}\n需要时说「发视频 {item['name']}」"), []
+        acts.append({"type": "video_file", "file": path, "extra": None})
+        return "🎬 已找到并下载视频「" + item["name"] + "」，正在发给你～", acts
 
     # ── 发送收藏 ──
     m = re.search(r"(?:发图|发图片|发照片)\s*[:：]?\s*(.+)", t)
@@ -114,13 +166,17 @@ def handle(text, msg_ctx=None):
     if m:
         item = saved.find("videos", _strip(m.group(1)))
         if not item:
-            return f"没有找到视频「{_strip(m.group(1))}」。说「视频列表」查看收藏", []
-        extra = f"🎬 {item.get('title') or item['name']}\n{item['url']}"
+            return "没有找到视频「" + _strip(m.group(1)) + "」。说「视频列表」查看收藏", []
+        vf = item.get("file") or ""
+        if vf and os.path.exists(vf):
+            acts.append({"type": "video_file", "file": vf, "extra": None})
+            return "🎬 视频「" + item["name"] + "」正在发送～", acts
+        extra = "🎬 " + (item.get("title") or item["name"]) + chr(10) + item["url"]
         cover = item.get("cover") or ""
         if cover and os.path.exists(cover):
             acts.append({"type": "video", "file": cover, "extra": extra})
-            return f"🎬 视频「{item['name']}」的封面+链接来啦～", acts
-        return f"🎬 {extra}", acts
+            return "🎬 视频「" + item["name"] + "」封面+链接来啦～", acts
+        return "🎬 " + extra, acts
 
     # ── 删除收藏 ──
     m = re.search(r"(?:删图|删除图片)\s*[:：]?\s*(.+)", t)

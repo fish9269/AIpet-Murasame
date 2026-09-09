@@ -163,16 +163,19 @@ def add_sticker(file_path=None, url=None, name=None) -> dict:
         return item
 
 
-def add_video(name, url, title="", cover_url=None) -> dict:
-    """收藏一个视频条目（标题+链接+封面图文件）"""
+def add_video(name, url, title="", cover_url=None, file=None) -> dict:
+    """收藏一个视频条目（file 为本地视频文件时直接引用；否则存标题+链接+封面）"""
     with _lock:
         st = _load()
         base, d = _paths()
         cover = ""
-        if cover_url:
-            cover = _download(cover_url, os.path.join(d, "covers"), ".jpg")
+        if file and os.path.exists(file):
+            cover = file  # 本地视频文件
+        else:
+            if cover_url:
+                cover = _download(cover_url, os.path.join(d, "covers"), ".jpg")
         item = {"name": _uniq_name("videos", name), "url": url,
-                "title": title or name, "cover": cover, "t": time.time()}
+                "title": title or name, "cover": cover, "file": file or "", "t": time.time()}
         st["videos"].append(item)
         _trim("videos")
         _save()
