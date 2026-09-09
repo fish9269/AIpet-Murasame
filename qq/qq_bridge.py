@@ -263,6 +263,12 @@ class QQBotBridge:
         self._groups_lock = threading.Lock()
         self._group_buf = {}               # group_id -> {last_others, last_bot_talk, recent[]}
         self._lively_last_global = 0.0     # 全局最近一次活泼发言时间（防刷屏）
+        # ===== QQ 会话活性自愈（防"平台下线但 NapCat 无感"的假死）=====
+        self._health_seq = 0               # 探针序号
+        self._health_pending = 0.0         # 最近一次探针发出时间(0=无在途)
+        self._health_fail = 0              # 连续失败次数
+        self._last_recover_ts = 0.0        # 上次自动重启 NapCat 时间（冷却防循环）
+        self._last_scan_hint_ts = 0.0      # 上次扫码提示时间（防刷屏）
 
         # ===== 对话调节（设置 → QQ配置）=====
         # （单条回复条数/字数限制见 _reply_limits/_cap_reply 与发送层 cap_clauses_count；
@@ -713,6 +719,183 @@ class QQBotBridge:
         except Exception as e:
             print(f"[QQBridge] ⚠ 活泼模式判定失败: {e}")
 
+    # ================= QQ 会话活性探测 & 自动自愈 =================
+    def _health_tick(self):
+        """每 20s 由后台守护调用：探测 QQ 会话活性，检测到平台下线(NapCat 无感)
+        时自动重启 NapCat 并（如需要扫码）弹码提示。"""
+        now = time.time()
+        # 无在途探针且距上次 >=50s → 发探针(get_login_info)
+        if self._health_pending == 0 and now - self._last_recover_ts >= 50:
+            self._health_seq += 1
+            self._health_pending = now
+            try:
+                _sent = self._safe_send({
+                    "action": "get_login_info",
+                    "echo": f"health_{self._health_seq}",
+                }, label="活性探测 ")
+                if not _sent:
+                    # WS 未连接/发送失败(重连中) → 不计失败，等重连后再探
+                    self._health_pending = 0
+            except Exception:
+                self._health_pending = 0
+        # 在途探针超时(90s 未收到对应 echo) → 失败计数
+        if self._health_pending and now - self._health_pending > 90:
+            self._health_fail += 1
+            print(f"[QQBridge] ❤️ 活性探测超时({self._health_fail}/2)，疑似 QQ 被平台下线")
+            self._health_pending = 0
+            if self._health_fail >= 2:
+                self._health_fail = 0
+                self._auto_recover_qq()
+        # 长时间无任何真实消息事件(30分钟)且探测正常 → 重置计时即可(群静默正常)
+
+    def _health_ok(self, seq):
+        """收到探针响应 → 清零失败计数"""
+        try:
+            if int(seq) == self._health_seq:
+                self._health_pending = 0
+                self._health_fail = 0
+        except Exception:
+            pass
+
+    def _auto_recover_qq(self):
+        """QQ 会话死亡自愈：冷却后杀 NapCat 全家 → 重启 launcher-user.bat →
+        等待自动登录；若需扫码则自动弹码提示(图片+弹窗)。"""
+        now = time.time()
+        if now - self._last_recover_ts < 1500:  # 25 分钟冷却，防循环
+            print("[QQBridge] ❤️ 距上次自动恢复不足 25 分钟，跳过(避免循环)")
+            return
+        self._last_recover_ts = now
+        print("[QQBridge] ❤️ 检测到 QQ 会话失效，开始自动重启 NapCat...")
+        import threading as _th
+        _th.Thread(target=self._recover_worker, daemon=True,
+                   name="QQAutoRecover").start()
+
+    def _recover_worker(self):
+        """在独立线程执行恢复流程(不阻塞后台守护)"""
+        import subprocess as _sp
+        import os as _os
+        base = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
+        try:
+            # 1. 杀 NapCat 全家(D:\QQ 注入链 + 引导器)
+            _sp.run(
+                ["powershell", "-NoProfile", "-Command",
+                 "Get-CimInstance Win32_Process | Where-Object { "
+                 "$_.Name -eq 'NapCatWinBootMain.exe' -or "
+                 "($_.Name -eq 'QQ.exe' -and $_.ExecutablePath -like 'D:\QQ\*') } | "
+                 "ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }"],
+                capture_output=True, timeout=20,
+                creationflags=getattr(_sp, "CREATE_NO_WINDOW", 0))
+            time.sleep(4)
+        except Exception as e:
+            print(f"[QQBridge] ❤️ 停止旧 NapCat 失败: {e}")
+        # 2. 启动 launcher-user.bat(隐藏+日志)
+        try:
+            nc_dir = _os.path.join(base, "NapCat.Shell.Windows.OneKey", "NapCat")
+            logf = _os.path.join(base, "tmp", "napcat_auto.log")
+            _sp.Popen(["cmd.exe", "/c", "launcher-user.bat"],
+                      cwd=nc_dir,
+                      creationflags=getattr(_sp, "CREATE_NO_WINDOW", 0),
+                      stdout=open(logf, "wb"), stderr=_sp.STDOUT)
+            print("[QQBridge] ❤️ 已重启 NapCat，等待自动登录...")
+        except Exception as e:
+            print(f"[QQBridge] ❤️ 启动 NapCat 失败: {e}")
+            return
+        # 3. 等待恢复：最多 90s；未登录(在弹码)则提示扫码
+        ok = False
+        deadline = time.time() + 90
+        while time.time() < deadline and not ok:
+            time.sleep(5)
+            try:
+                import socket as _sock
+                with _sock.socket(_sock.AF_INET, _sock.SOCK_STREAM) as sd:
+                    sd.settimeout(2)
+                    if sd.connect_ex(("127.0.0.1", 3001)) != 0:
+                        continue
+                # 3001 通 → 探测登录态
+                import websocket as _ws, json as _json
+                w = _ws.create_connection("ws://127.0.0.1:3001",
+                                          header=["Authorization: Bearer " + self._napcat_token()],
+                                          timeout=5)
+                w.send(_json.dumps({"action": "get_login_info", "echo": "h1"}))
+                try:
+                    m = _json.loads(w.recv())
+                    if m.get("echo") == "h1" and m.get("data"):
+                        ok = True
+                except Exception:
+                    pass
+                w.close()
+            except Exception:
+                pass
+        if ok:
+            print("[QQBridge] ❤️ NapCat 自动恢复成功(已登录)")
+            return
+        # 未登录 → 弹码提示
+        print("[QQBridge] ❤️ NapCat 需要重新扫码授权，弹出二维码提示...")
+        self._prompt_scan()
+        # 继续等待(10 分钟内每 30s 探测一次，登录成功则结束)
+        deadline2 = time.time() + 600
+        while time.time() < deadline2 and not ok:
+            time.sleep(30)
+            try:
+                import socket as _sock
+                with _sock.socket(_sock.AF_INET, _sock.SOCK_STREAM) as sd:
+                    sd.settimeout(2)
+                    if sd.connect_ex(("127.0.0.1", 3001)) != 0:
+                        continue
+                import websocket as _ws, json as _json
+                w = _ws.create_connection("ws://127.0.0.1:3001",
+                                          header=["Authorization: Bearer " + self._napcat_token()],
+                                          timeout=5)
+                w.send(_json.dumps({"action": "get_login_info", "echo": "h2"}))
+                try:
+                    m = _json.loads(w.recv())
+                    if m.get("echo") == "h2" and m.get("data"):
+                        ok = True
+                except Exception:
+                    pass
+                w.close()
+            except Exception:
+                pass
+            if not ok:
+                self._prompt_scan(force=True)
+        print("[QQBridge] ❤️ 扫码恢复流程结束" + ("(已登录)" if ok else "(仍未登录，请手动处理)"))
+
+    def _napcat_token(self) -> str:
+        try:
+            from qq.qq_config import get_qq_config as _c
+            return str(_c().get("napcat_token") or "")
+        except Exception:
+            return ""
+
+    def _prompt_scan(self, force=False):
+        """弹出二维码提示：打开二维码图片(屏幕可见) + 系统弹窗(防刷屏)"""
+        try:
+            import subprocess as _sp
+            import os as _os
+            base = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
+            qr = _os.path.join(base, "NapCat.Shell.Windows.OneKey", "NapCat",
+                               "cache", "qrcode.png")
+            now = time.time()
+            if now - self._last_scan_hint_ts > 90 or force:
+                self._last_scan_hint_ts = now
+                if _os.path.exists(qr):
+                    _sp.Popen(["cmd.exe", "/c", "start", "", qr],
+                              creationflags=getattr(_sp, "CREATE_NO_WINDOW", 0))
+                try:
+                    _sp.run(
+                        ["powershell", "-NoProfile", "-Command",
+                         "Add-Type -AssemblyName System.Windows.Forms;"
+                         "[System.Windows.Forms.MessageBox]::Show("
+                         "'NapCat 登录失效，已自动重启并弹出二维码，请用手机QQ扫码授权后继续使用。',"
+                         "'QQ 需重新扫码')"],
+                        capture_output=True, timeout=15,
+                        creationflags=getattr(_sp, "CREATE_NO_WINDOW", 0))
+                except Exception:
+                    pass
+                print("[QQBridge] ❤️ 已提示扫码(二维码图片已打开)")
+        except Exception as e:
+            print(f"[QQBridge] ❤️ 扫码提示失败: {e}")
+
     def _background_watcher(self):
         """后台守护线程：空闲自动离线（+活泼模式），每 20 秒轮询一次"""
         print("[QQBridge] 🔧 后台守护已启动（空闲自动离线 / 活泼模式）")
@@ -743,6 +926,10 @@ class QQBotBridge:
                     self._lively_tick()
             except Exception as e:
                 print(f"[QQBridge] ⚠ 后台守护异常: {e}")
+            try:
+                self._health_tick()
+            except Exception as _he:
+                print(f"[QQBridge] ⚠ 健康检查异常: {_he}")
             self._sleep(20)
 
     def _handle_lively(self, msg: dict):
@@ -926,7 +1113,13 @@ class QQBotBridge:
         # 响应（echo 匹配）→ 处理登录信息 / 群名查询结果
         if "echo" in data and "data" in data:
             echo = data.get("echo", "")
-            if echo == "login_info" and data.get("data"):
+            if echo.startswith("health_"):
+                # 活性探针响应 → 清零失败计数
+                try:
+                    self._health_ok(echo[len("health_"):])
+                except Exception:
+                    pass
+            elif echo == "login_info" and data.get("data"):
                 info = data.get("data") or {}
                 self.self_id = info.get("user_id")
                 print(f"[QQBridge] 当前登录账号: {self.self_id} ({info.get('nickname', '')})")
