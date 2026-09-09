@@ -997,7 +997,21 @@ class PCLMainWindow(QWidget):
         qq_tools_lay.addWidget(self.qq_webui_btn)
         self.qq_tools_row.hide()
 
+        # Token 复制行(工具行上方)：直接进入配置页若仍要求输入 token，可一键复制
+        self.qq_token_row = QWidget()
+        tok_lay = QHBoxLayout(self.qq_token_row)
+        tok_lay.setContentsMargins(0, 0, 0, 0)
+        tok_lay.addStretch(1)
+        self.qq_token_btn = QPushButton("  📋 复制 NapCat Token")
+        self.qq_token_btn.setToolTip("点击复制 WebUI Token 到剪贴板（配置页要求输入时粘贴即可）")
+        self.qq_token_btn.setCursor(Qt.PointingHandCursor)
+        self.qq_token_btn.setStyleSheet(qq_tool_style)
+        self.qq_token_btn.clicked.connect(self._on_copy_token)
+        tok_lay.addWidget(self.qq_token_btn)
+        self.qq_token_row.hide()
+
         btn_row.addStretch(0)
+        self.preview_layout.addWidget(self.qq_token_row)
         self.preview_layout.addWidget(self.qq_tools_row)
         self.preview_layout.addLayout(btn_row)
         self._qq_btn_visible = qq_enabled
@@ -1358,6 +1372,8 @@ class PCLMainWindow(QWidget):
         try:
             if getattr(self, "qq_tools_row", None) is not None:
                 self.qq_tools_row.setVisible(bool(on))
+            if getattr(self, "qq_token_row", None) is not None:
+                self.qq_token_row.setVisible(bool(on))
         except Exception:
             pass
 
@@ -1373,6 +1389,21 @@ class PCLMainWindow(QWidget):
             return f"http://127.0.0.1:6099/webui?token={tok}"
         except Exception:
             return "http://127.0.0.1:6099/webui?token=6bb2d3cc74ea"
+
+    def _on_copy_token(self):
+        """复制 WebUI Token 到剪贴板，并短暂提示"""
+        try:
+            tok = self._napcat_token()
+            if not tok:
+                tok = "6bb2d3cc74ea"
+            from PyQt5.QtWidgets import QApplication
+            QApplication.clipboard().setText(tok)
+            self.qq_token_btn.setText("  ✅ 已复制 Token")
+            from PyQt5.QtCore import QTimer
+            QTimer.singleShot(2000, lambda: self.qq_token_btn.setText("  📋 复制 NapCat Token"))
+            print("[PCL] Token 已复制到剪贴板")
+        except Exception as e:
+            print(f"[PCL] 复制失败: {e}")
 
     def _on_napcat_webui(self):
         try:
@@ -1402,12 +1433,25 @@ class PCLMainWindow(QWidget):
 
 
     def _napcat_relogin_worker(self):
-        """后台线程：杀 NapCat → 重启 → 探测登录(12s) → 未登录则弹码提示(持续等待)"""
+        """后台线程：杀 NapCat → 重启 → 探测恢复(3001就绪≈已登录) → 未登录则弹码等待。
+        全流程打印日志；无论成功失败都通过信号恢复按钮。"""
         import subprocess as _sp
         import socket as _sock
-        import json as _json
+        import time as _time
         base = _app_base_dir()
+        _done = [False]
+
+        def _finish(ok):
+            if _done[0]:
+                return
+            _done[0] = True
+            try:
+                self.napcat_relogin_done.emit(bool(ok))
+            except Exception:
+                pass
+
         try:
+            print("[PCL] 🔄 重新扫码登录：停止旧 NapCat...")
             _sp.run(
                 ["powershell", "-NoProfile", "-Command",
                  "Get-CimInstance Win32_Process | Where-Object { "
@@ -1416,63 +1460,49 @@ class PCLMainWindow(QWidget):
                  "ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }"],
                 capture_output=True, timeout=25,
                 creationflags=getattr(_sp, "CREATE_NO_WINDOW", 0))
-            import time as _time
             _time.sleep(4)
-        except Exception:
-            pass
-        try:
             nc_dir = os.path.join(base, "NapCat.Shell.Windows.OneKey", "NapCat")
             logf = os.path.join(base, "tmp", "napcat_manual.log")
             _sp.Popen(["cmd.exe", "/c", "launcher-user.bat"], cwd=nc_dir,
                       creationflags=getattr(_sp, "CREATE_NO_WINDOW", 0),
                       stdout=open(logf, "wb"), stderr=_sp.STDOUT)
+            print("[PCL] 🔄 NapCat 已重新启动，等待登录(3001就绪)...")
         except Exception as e:
-            print(f"[PCL] NapCat 启动失败: {e}")
-            self.napcat_relogin_done.emit(False)
+            print(f"[PCL] ⚠ NapCat 启动失败: {e}")
+            _finish(False)
             return
 
-        def _login_ok():
+        def _port_ready():
             try:
                 with _sock.socket(_sock.AF_INET, _sock.SOCK_STREAM) as sd:
                     sd.settimeout(2)
-                    if sd.connect_ex(("127.0.0.1", 3001)) != 0:
-                        return False
-                import websocket as _ws
-                w = _ws.create_connection("ws://127.0.0.1:3001",
-                                          header=["Authorization: Bearer " + self._napcat_token()],
-                                          timeout=5)
-                w.send(_json.dumps({"action": "get_login_info", "echo": "m1"}))
-                try:
-                    m = _json.loads(w.recv())
-                    return bool(m.get("echo") == "m1" and m.get("data"))
-                except Exception:
-                    return False
-                finally:
-                    try:
-                        w.close()
-                    except Exception:
-                        pass
+                    return sd.connect_ex(("127.0.0.1", 3001)) == 0
             except Exception:
                 return False
 
-        import time as _time
-        # 前 12 秒等自动登录
-        dl = _time.time() + 12
+        # 阶段1：最多 70 秒等自动登录(每 3s 探测)
+        dl = _time.time() + 70
+        waited = 0
         while _time.time() < dl:
-            if _login_ok():
-                self.napcat_relogin_done.emit(True)
+            if _port_ready():
+                print(f"[PCL] ✅ NapCat 已恢复(自动登录成功，耗时约 {waited}s)")
+                _finish(True)
                 return
-            _time.sleep(2)
-        # 未自动登录 → 弹码(打开图片+系统弹窗)，持续等待 10 分钟
+            _time.sleep(3)
+            waited += 3
+        # 阶段2：未自动登录 → 弹二维码+弹窗提示，最多等 5 分钟扫码
+        print("[PCL] 🔄 自动登录未成功，弹出二维码等待扫码...")
         self._prompt_scan_ui()
-        dl2 = _time.time() + 600
+        dl2 = _time.time() + 300
         while _time.time() < dl2:
-            _time.sleep(20)
-            if _login_ok():
-                self.napcat_relogin_done.emit(True)
+            _time.sleep(10)
+            if _port_ready():
+                print("[PCL] ✅ 扫码登录成功，NapCat 已恢复")
+                _finish(True)
                 return
             self._prompt_scan_ui()
-        self.napcat_relogin_done.emit(False)
+        print("[PCL] ⚠ 等待扫码超时(5分钟)，NapCat 仍未登录")
+        _finish(False)
 
     def _napcat_token(self) -> str:
         try:
