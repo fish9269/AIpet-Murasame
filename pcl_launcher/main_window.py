@@ -998,7 +998,7 @@ class PCLMainWindow(QWidget):
         self.qq_tools_row.hide()
 
         btn_row.addStretch(0)
-        self.preview_layout.addLayout(self.qq_tools_row)
+        self.preview_layout.addWidget(self.qq_tools_row)
         self.preview_layout.addLayout(btn_row)
         self._qq_btn_visible = qq_enabled
         # 恢复逻辑在按钮事件 connect 之后注册一次(在 __init__ 后段或事件处)
