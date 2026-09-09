@@ -461,14 +461,30 @@ def chat_once(user_text: str, use_sticker: bool = True, vision_desc: str = None,
     else:
         messages.append({"role": "user", "content": f"{_fact_prefix}{user_text}"})
 
-    # 表情包指令（仅当启用且存在表情包时）
+    # 表情包指令（仅当启用且存在表情包时；含自定义收藏表情，可自主活跃气氛）
     # 允许 0~2 个：AI 根据语境自主决定发不发、发几张
     if use_sticker and stickers:
+        _stk_extra = ""
+        try:
+            from qq.qq_saved import custom_stickers as _cstk
+            _mine = _cstk()
+            if _mine:
+                _desc_parts = []
+                for _nm, _ds, _f in _mine[:8]:
+                    _desc_parts.append(_nm + (f"（{_ds[:18]}）" if _ds else ""))
+                _stk_extra = (
+                    "\n另有一些【自存表情】（你收藏过的表情，标注「自存」）："
+                    + "、".join(_desc_parts)
+                    + "。合适的时候可以用它们活跃气氛（同样用 [表情:名称] 标记）。"
+                    + "注意：同一条回复里自存表情与上方默认表情只选一种，不要混着发。")
+        except Exception:
+            pass
         sticker_hint = (
             "\n\n【表情包】回复的最后（换行后）可以根据语境附带 0~2 个表情包标记，"
             f"从以下列表中选择最贴合语境的一个或多个：{'、'.join(stickers)}。"
             '格式为 [表情:名称]，例如 [表情:撒娇] 或 [表情:思考][表情:肯定]。'
             '如果不需要表情包就不发，不要为了发而发。'
+            + _stk_extra
         )
         # 把表情包指令附加到最后一条 user 消息上
         if messages and messages[-1]["role"] == "user":

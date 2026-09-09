@@ -374,6 +374,18 @@ def describe_video(video_path: str) -> str:
             pass
 
 
+def describe_sticker(image_path: str) -> str:
+    """给收藏表情生成短标签：用不超过12字短语描述内容与情绪（供自主发图识别用）"""
+    if not image_path or not os.path.exists(image_path):
+        return ""
+    identity = (
+        "这是一张表情包/图片，请用不超过12个字的短语概括它的内容与情绪"
+        "（例如：开心小猫、生气跺脚、委屈大哭、得意洋洋、无语翻白眼）。"
+        "只输出短语本身，不要解释、不要加引号。"
+    )
+    return _vision_request(identity, [image_path])
+
+
 def clean_vision_tmp():
     """清理临时下载的图片文件"""
     try:

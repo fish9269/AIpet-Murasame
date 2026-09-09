@@ -92,6 +92,32 @@ def get_sticker_path(sticker_name: str):
             return p
     return None
 
+def resolve_sticker_files(stickers):
+    """解析表情发送文件列表：自定义收藏表情优先且同轮不混发默认表情。
+    返回 (文件路径列表, 是否含自定义)。"""
+    custom_files = []
+    default_files = []
+    custom_used = False
+    try:
+        from qq.qq_saved import sticker_file as _sf
+        for name in (stickers or []):
+            cp = _sf(name)
+            if cp and os.path.exists(cp):
+                custom_files.append(cp)
+                custom_used = True
+    except Exception:
+        pass
+    if custom_used:
+        # 本轮含自存表情 → 只发自存，不发默认（防止刷屏；不影响以后轮次）
+        return custom_files, True
+    for name in (stickers or []):
+        p = get_sticker_path(name)
+        if p:
+            default_files.append(p)
+    return default_files, False
+
+
+
 
 # ── 私聊切句（按标点逐条发送）─────────────────────────────
 # 强断句：句号/问号/感叹号/省略号/分号/换行（无条件切断）
@@ -773,8 +799,7 @@ class QQBotBridge:
             }, label=f"活泼群{group_id} ")
             if ok:
                 print(f"[QQBridge] 🎉 活泼群 {group_id} 发言: {reply[:40]}...")
-            for sticker in (stickers or []):
-                path = get_sticker_path(sticker)
+            for path in resolve_sticker_files(stickers)[0]:
                 if path:
                     try:
                         send_image(self.ws, path, "group", int(group_id), self.self_id)
@@ -1259,9 +1284,13 @@ class QQBotBridge:
                     _ctx_img = None
                     try:
                         from qq.qq_vision import extract_image_path as _eip
-                        _seg = msg.get("message_seg")
-                        if _seg:
-                            _ctx_img = _eip(_seg)
+                        # 遍历合并组各消息段取图：多图时取最后一张（避免保存错图）
+                        for _sub in (msg.get("merged_msgs") or [msg]):
+                            _seg = _sub.get("message_seg")
+                            if _seg:
+                                _p = _eip(_seg)
+                                if _p:
+                                    _ctx_img = _p  # 保留最后一张
                         if not _ctx_img:
                             _ref = msg.get("img_ref") or {}
                             _ctx_img = _eip(_ref.get("message"))
@@ -1548,8 +1577,7 @@ class QQBotBridge:
                 print(f"[QQBridge] → 私聊 {user_id} 第{idx+1}/{len(clauses)}句: {clause[:30]}...")
 
         # 表情包（最后一条文字后发送，0~2 个；失败不影响"已回复"判定）
-        for sticker in (stickers or []):
-            path = get_sticker_path(sticker)
+        for path in resolve_sticker_files(stickers)[0]:
             if path:
                 try:
                     send_image(self.ws, path, "private", user_id, self.self_id)
@@ -1582,8 +1610,7 @@ class QQBotBridge:
             print(f"[QQBridge] → 群 {group_id} 回复: {reply[:40]}...")
         else:
             return False
-        for sticker in (stickers or []):
-            path = get_sticker_path(sticker)
+        for path in resolve_sticker_files(stickers)[0]:
             if path:
                 try:
                     send_image(self.ws, path, "group", group_id, self.self_id)

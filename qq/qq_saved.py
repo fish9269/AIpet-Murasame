@@ -138,8 +138,9 @@ def add_image(file_path=None, url=None, name=None) -> dict:
         return item
 
 
-def add_sticker(file_path=None, url=None, name=None) -> dict:
-    """收藏一张群表情包图片（与内置默认表情包分离）"""
+def add_sticker(file_path=None, url=None, name=None, desc="") -> dict:
+    """收藏一张群表情包图片（与内置默认表情包分离）。
+    desc：图片内容简短描述（保存时由视觉识别生成，供模型自主选择时机发送）"""
     with _lock:
         st = _load()
         base, d = _paths()
@@ -155,12 +156,31 @@ def add_sticker(file_path=None, url=None, name=None) -> dict:
                 saved = None
         if not saved:
             return None
+        # 名称优先用简短描述（如"开心小猫"），否则退回原名/序号
+        if not name and desc:
+            name = desc[:10]
         item = {"name": _uniq_name("stickers", name), "file": saved,
-                "src": url or file_path or "", "t": time.time()}
+                "src": url or file_path or "", "desc": (desc or ""), "t": time.time()}
         st["stickers"].append(item)
         _trim("stickers")
         _save()
         return item
+
+
+def custom_stickers():
+    """自定义收藏表情列表 → [(name, desc, file)]（按收藏时间）"""
+    with _lock:
+        return [(str(x.get("name")), str(x.get("desc") or ""), x.get("file") or "")
+                for x in _load()["stickers"]]
+
+
+def sticker_file(name) -> str:
+    """按名称找收藏表情文件路径；无则空串"""
+    with _lock:
+        for x in _load()["stickers"]:
+            if str(x.get("name", "")).lower() == str(name).strip().lower():
+                return x.get("file") or ""
+        return ""
 
 
 def add_video(name, url, title="", cover_url=None, file=None) -> dict:

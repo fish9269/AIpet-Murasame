@@ -86,24 +86,50 @@ def handle(text, msg_ctx=None):
         return None, []
     acts = []
 
-    # ── 收藏图片/表情（用本条或群最近图）──
-    want_sticker = _has_any(t, ("保存表情", "存表情", "收藏表情"))
-    want_image = _has_any(t, ("保存图片", "保存这张图", "存图", "收藏图片", "保存这张图片"))
+    # ── 收藏图片/表情（用本条或群最近图；多图时取最后一张，避免存错）──
+    _obj = cmd_object(t)
+    _save_intent = any(k in t for k in ("保存", "收藏", "存下", "存个", "存一下")) or         _has_any(t, ("存表情", "存图"))
+    want_sticker = _obj == "sticker" and _save_intent
+    want_image = _obj == "image" and _save_intent
     if want_image or want_sticker:
         kind = "stickers" if want_sticker else "images"
         fp = None
         if msg_ctx:
             fp = msg_ctx.get("cur_image_file") or msg_ctx.get("last_image_file")
         if not fp:
-            return ("没有可保存的图片哦～ 请先发一张图片，或对我说「搜图 关键词」"
+            return ("没有可保存的图片/表情哦～ 请先发一张图，或对我说「搜图 关键词」"
                     "让我上网找～（收藏上限各 10 个，满了会自动替换最旧的）"), []
-        item = (saved.add_sticker if want_sticker else saved.add_image)(fp)
+        # 保存时识别图片内容：生成短标签作名字与描述（供模型自主选择时机发送）
+        _desc = ""
+        try:
+            from qq.qq_vision import describe_sticker as _dst
+            _desc = (_dst(fp) or "").strip()
+        except Exception:
+            pass
+        if want_sticker:
+            item = saved.add_sticker(fp, desc=_desc)
+            label = "表情"
+        else:
+            item = saved.add_image(fp)
+            label = "图片"
         if not item:
-            return "图片保存失败（文件读取/下载出错）", []
-        label = "表情" if want_sticker else "图片"
-        return (f"已收藏{label}「{item['name']}」（{len(saved.names(kind))}/10）。"
-                f"需要时说「{'发表情' if want_sticker else '发图'} {item['name']}」，"
+            return "保存失败（文件读取/下载出错）", []
+        extra = ""
+        if want_sticker and _desc:
+            extra = "（识别内容：" + _desc[:40] + "）——合适的时候我会用它活跃气氛～"
+        return (f"已收藏{label}「{item['name']}」"
+                f"（{len(saved.names(kind))}/10）{extra}。"
                 f"删除说「{'删表情' if want_sticker else '删图'} {item['name']}」"), []
+
+    # 搜索意图但没带关键词(如"帮我搜索这个视频"无具体内容) → 引导说法
+    if _save_intent is not None or (_obj in ("video", "image", "sticker")
+                                    and any(k in t for k in ("搜", "找", "查", "搜索"))):
+        _has_content = bool(re.search(r"(?:搜图|搜索图片|搜图片|找图片|搜视频|搜索视频|搜个视频|搜段视频|看视频)\s*[:：]?\s*\S+", t))
+        if not _has_content:
+            obj_word = {"video": "视频", "image": "图片", "sticker": "表情"}.get(_obj, "")
+            if obj_word:
+                return ("想搜什么样的" + obj_word + "呀？直接对我说「搜" + obj_word + " 关键词」"
+                        "（例如：搜" + obj_word + " 猫咪）就能帮你找到并保存发送～"), []
 
     # ── 搜图并保存 ──
     m = re.search(r"(?:搜图|搜索图片|搜图片|找图片)\s*[:：]?\s*(.+)", t)
@@ -206,16 +232,48 @@ def handle(text, msg_ctx=None):
 
 
 def is_media_cmd(text) -> bool:
-    """快速判断是否为媒体/收藏指令（供对话链路拦截）"""
+    """模糊检测媒体/收藏意图（群聊免 @ 放行用；自然说法也可命中）"""
     t = _strip(text or "")
     if not t:
         return False
-    if _has_any(t, ("保存图片", "保存这张图", "存图", "收藏图片", "保存表情", "存表情", "收藏表情",
-                    "搜图", "搜视频", "搜索图片", "搜索视频", "发图", "发图片", "发表情",
-                    "发视频", "删图", "删表情", "删视频", "删除图片", "删除表情", "删除视频",
-                    "图列表", "图片列表", "表情列表", "视频列表", "我的收藏", "收藏列表")):
+    n = t.lower().replace(" ", "").replace("　", "").replace("帮我", "").replace("帮我", "")
+    # 明确管理词
+    if any(k in n for k in ("保存表情", "存表情", "收藏表情", "保存这张图", "保存图片",
+                            "存图", "收藏图片", "保存这个", "这个表情", "表情包",
+                            "发图", "发图片", "发表情", "发视频", "删图", "删表情",
+                            "删视频", "删除表情", "删除图片", "图列表", "图片列表",
+                            "表情列表", "视频列表", "我的收藏", "收藏列表")):
+        return True
+    # 搜索意图 + 对象（模糊）
+    has_search = any(k in n for k in ("搜索", "搜图", "搜个", "搜张", "搜一下", "帮我搜",
+                                      "搜视频", "搜个视频", "找图", "找视频", "找张",
+                                      "搜点", "搜一个", "搜段视频"))
+    if has_search and any(k in n for k in ("图", "图片", "视频", "表情", "表情包")):
+        return True
+    # "保存" + 对象
+    if ("保存" in n or "存下" in n or "收藏" in n) and any(k in n for k in ("图", "图片", "表情", "视频")):
+        return True
+    # 组合：搜索/找 + 对象词
+    if ("搜" in n or "找" in n or "查" in n) and any(k in n for k in ("图片", "视频", "表情", "表情包", "段子")):
         return True
     return False
 
 
-import os  # noqa: E402  (模块尾 import 避免循环)
+def is_search_cmd(text) -> bool:
+    """是否为搜索类指令（供对象分类）"""
+    n = (text or "").lower().replace(" ", "").replace("　", "")
+    return any(k in n for k in ("搜图", "搜索图片", "搜图片", "找图片", "搜个图", "搜张图",
+                                "搜索这个图", "帮我搜图", "搜视频", "搜索视频", "搜个视频",
+                                "搜段视频", "搜索这个视频", "帮我搜视频", "找视频", "看视频"))
+
+
+def cmd_object(text) -> str:
+    """判断搜索对象：video / image / sticker / ''"""
+    n = (text or "").lower().replace(" ", "").replace("　", "")
+    if any(k in n for k in ("视频", "段子")):
+        return "video"
+    if any(k in n for k in ("表情", "表情包")):
+        return "sticker"
+    return "image"
+
+
