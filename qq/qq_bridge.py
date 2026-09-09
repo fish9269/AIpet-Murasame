@@ -738,15 +738,47 @@ class QQBotBridge:
                     self._health_pending = 0
             except Exception:
                 self._health_pending = 0
-        # 在途探针超时(90s 未收到对应 echo) → 失败计数
+        # 判据A：NapCat 日志出现下线通知(平台踢下线必写) → 立即计数
+        if self._scan_napcat_logs():
+            self._health_fail += 1
+            print(f"[QQBridge] ❤️ 检测到 NapCat 下线通知({self._health_fail}/2)")
+            if self._health_fail >= 2:
+                self._health_fail = 0
+                self._auto_recover_qq()
+            return
+        # 判据B：在途探针超时(90s 未收到对应 echo) → 失败计数(辅助，防日志漏报)
         if self._health_pending and now - self._health_pending > 90:
             self._health_fail += 1
-            print(f"[QQBridge] ❤️ 活性探测超时({self._health_fail}/2)，疑似 QQ 被平台下线")
+            print(f"[QQBridge] ❤️ 活性探测超时({self._health_fail}/2)，疑似 QQ 会话失效")
             self._health_pending = 0
             if self._health_fail >= 2:
                 self._health_fail = 0
                 self._auto_recover_qq()
         # 长时间无任何真实消息事件(30分钟)且探测正常 → 重置计时即可(群静默正常)
+
+    def _scan_napcat_logs(self) -> bool:
+        """扫描 NapCat 日志文件尾部：出现平台下线/登录失效通知(3分钟内) → True。
+        这是 QQ 被平台踢下线时 NapCat 必写的日志，比 API 探针可靠。"""
+        import glob as _glob
+        try:
+            base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            now = time.time()
+            kws = ("KickedOffLine", "下线通知", "登录已失效", "身份已失效",
+                   "账号当前登录已失效", "请重新登录")
+            for fp in _glob.glob(os.path.join(base, "tmp", "napcat_run*.log")) +                     _glob.glob(os.path.join(base, "tmp", "napcat_auto.log")):
+                try:
+                    st = os.stat(fp)
+                    if now - st.st_mtime > 180:
+                        continue  # 3 分钟内没有新写入
+                    with open(fp, "r", encoding="utf-8", errors="replace") as f:
+                        tail = f.read()[-4000:]
+                    if any(k in tail for k in kws):
+                        return True
+                except Exception:
+                    continue
+        except Exception:
+            pass
+        return False
 
     def _health_ok(self, seq):
         """收到探针响应 → 清零失败计数"""

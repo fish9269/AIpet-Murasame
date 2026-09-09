@@ -705,6 +705,8 @@ class _RoundBackWidget(QWidget):
 
 
 class PCLMainWindow(QWidget):
+
+    napcat_relogin_done = pyqtSignal(bool)   # True=已恢复/已提示扫码; False=失败
     def __init__(self):
         super().__init__()
         self._pet_process = None
@@ -968,9 +970,39 @@ class PCLMainWindow(QWidget):
         if wechat_enabled:
             btn_row.addWidget(self.wechat_btn, 1)
 
+        # ===== QQ 工具按钮行（仅 QQ AIpet 启动后显示）=====
+        self.qq_tools_row = QWidget()
+        qq_tools_lay = QHBoxLayout(self.qq_tools_row)
+        qq_tools_lay.setContentsMargins(0, 0, 0, 0)
+        qq_tools_lay.setSpacing(int(8 * S))
+        qq_tools_lay.addStretch(1)
+        qq_tool_style = f"""
+            QPushButton {{ background: rgba(255,255,255,160); color: {Color1.name()};
+                border: 1px solid {Color5.name()};
+                padding: {int(6*S)}px {int(14*S)}px; font-size: {int(12*S)}px;
+                font-family: 'Microsoft YaHei'; border-radius: {btn_radius()}px; }}
+            QPushButton:hover {{ background: {Color4.name()}; color: white; }}
+        """
+        self.qq_relogin_btn = QPushButton("  🔄 重新扫码登录 NapCat")
+        self.qq_relogin_btn.setToolTip("QQ 被平台下线/登录失效时，强制重启 NapCat；如需授权会弹出二维码")
+        self.qq_relogin_btn.setCursor(Qt.PointingHandCursor)
+        self.qq_relogin_btn.setStyleSheet(qq_tool_style)
+        self.qq_relogin_btn.clicked.connect(self._on_napcat_relogin)
+        qq_tools_lay.addWidget(self.qq_relogin_btn)
+        self.qq_webui_btn = QPushButton("  🌐 NapCat 配置")
+        self.qq_webui_btn.setToolTip("打开 NapCat 配置界面（浏览器）")
+        self.qq_webui_btn.setCursor(Qt.PointingHandCursor)
+        self.qq_webui_btn.setStyleSheet(qq_tool_style)
+        self.qq_webui_btn.clicked.connect(self._on_napcat_webui)
+        qq_tools_lay.addWidget(self.qq_webui_btn)
+        self.qq_tools_row.hide()
+
         btn_row.addStretch(0)
+        self.preview_layout.addLayout(self.qq_tools_row)
         self.preview_layout.addLayout(btn_row)
         self._qq_btn_visible = qq_enabled
+        # 恢复逻辑在按钮事件 connect 之后注册一次(在 __init__ 后段或事件处)
+        self.napcat_relogin_done.connect(self._on_napcat_relogin_done)
 
         # ===== 底部功能按钮面板（桌宠启动后才显示）=====
         self.control_panel = QWidget()
@@ -1321,6 +1353,163 @@ class PCLMainWindow(QWidget):
         self._pet_process = None
         self._running_pet_id = None
 
+    def _set_qq_tools_visible(self, on: bool):
+        """QQ AIpet 运行中才显示 NapCat 工具按钮"""
+        try:
+            if getattr(self, "qq_tools_row", None) is not None:
+                self.qq_tools_row.setVisible(bool(on))
+        except Exception:
+            pass
+
+    def _napcat_webui_url(self) -> str:
+        try:
+            import json as _json
+            base = _app_base_dir()
+            with open(os.path.join(base, "NapCat.Shell.Windows.OneKey", "NapCat",
+                                   "config", "webui.json"), "r", encoding="utf-8") as f:
+                tok = (_json.load(f) or {}).get("token", "")
+            if not tok:
+                tok = "6bb2d3cc74ea"
+            return f"http://127.0.0.1:6099/webui?token={tok}"
+        except Exception:
+            return "http://127.0.0.1:6099/webui?token=6bb2d3cc74ea"
+
+    def _on_napcat_webui(self):
+        try:
+            import webbrowser
+            webbrowser.open(self._napcat_webui_url())
+        except Exception as e:
+            print(f"[PCL] 打开 NapCat 配置失败: {e}")
+
+    def _on_napcat_relogin(self):
+        """强制重启 NapCat：杀进程→重新启动→等待自动登录→未登录则弹二维码+提示"""
+        if getattr(self, "_napcat_relogin_busy", False):
+            return
+        self._napcat_relogin_busy = True
+        self.qq_relogin_btn.setEnabled(False)
+        self.qq_relogin_btn.setText("  ⏳ 正在重启 NapCat...")
+        import threading as _th
+        _th.Thread(target=self._napcat_relogin_worker, daemon=True).start()
+
+    def _on_napcat_relogin_done(self, ok: bool):
+        """扫码重启线程结束回调(主线程)"""
+        self._napcat_relogin_busy = False
+        self.qq_relogin_btn.setEnabled(True)
+        self.qq_relogin_btn.setText("  🔄 重新扫码登录 NapCat")
+        if not ok:
+            msg = "NapCat 重启失败" + chr(10) + "请检查后重试，或查看启动器日志。"
+            self._show_config_dialog(msg)
+
+
+    def _napcat_relogin_worker(self):
+        """后台线程：杀 NapCat → 重启 → 探测登录(12s) → 未登录则弹码提示(持续等待)"""
+        import subprocess as _sp
+        import socket as _sock
+        import json as _json
+        base = _app_base_dir()
+        try:
+            _sp.run(
+                ["powershell", "-NoProfile", "-Command",
+                 "Get-CimInstance Win32_Process | Where-Object { "
+                 "$_.Name -eq 'NapCatWinBootMain.exe' -or "
+                 "($_.Name -eq 'QQ.exe' -and $_.ExecutablePath -like 'D:\QQ\*') } | "
+                 "ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }"],
+                capture_output=True, timeout=25,
+                creationflags=getattr(_sp, "CREATE_NO_WINDOW", 0))
+            import time as _time
+            _time.sleep(4)
+        except Exception:
+            pass
+        try:
+            nc_dir = os.path.join(base, "NapCat.Shell.Windows.OneKey", "NapCat")
+            logf = os.path.join(base, "tmp", "napcat_manual.log")
+            _sp.Popen(["cmd.exe", "/c", "launcher-user.bat"], cwd=nc_dir,
+                      creationflags=getattr(_sp, "CREATE_NO_WINDOW", 0),
+                      stdout=open(logf, "wb"), stderr=_sp.STDOUT)
+        except Exception as e:
+            print(f"[PCL] NapCat 启动失败: {e}")
+            self.napcat_relogin_done.emit(False)
+            return
+
+        def _login_ok():
+            try:
+                with _sock.socket(_sock.AF_INET, _sock.SOCK_STREAM) as sd:
+                    sd.settimeout(2)
+                    if sd.connect_ex(("127.0.0.1", 3001)) != 0:
+                        return False
+                import websocket as _ws
+                w = _ws.create_connection("ws://127.0.0.1:3001",
+                                          header=["Authorization: Bearer " + self._napcat_token()],
+                                          timeout=5)
+                w.send(_json.dumps({"action": "get_login_info", "echo": "m1"}))
+                try:
+                    m = _json.loads(w.recv())
+                    return bool(m.get("echo") == "m1" and m.get("data"))
+                except Exception:
+                    return False
+                finally:
+                    try:
+                        w.close()
+                    except Exception:
+                        pass
+            except Exception:
+                return False
+
+        import time as _time
+        # 前 12 秒等自动登录
+        dl = _time.time() + 12
+        while _time.time() < dl:
+            if _login_ok():
+                self.napcat_relogin_done.emit(True)
+                return
+            _time.sleep(2)
+        # 未自动登录 → 弹码(打开图片+系统弹窗)，持续等待 10 分钟
+        self._prompt_scan_ui()
+        dl2 = _time.time() + 600
+        while _time.time() < dl2:
+            _time.sleep(20)
+            if _login_ok():
+                self.napcat_relogin_done.emit(True)
+                return
+            self._prompt_scan_ui()
+        self.napcat_relogin_done.emit(False)
+
+    def _napcat_token(self) -> str:
+        try:
+            import json as _json
+            with open(os.path.join(_app_base_dir(), "NapCat.Shell.Windows.OneKey",
+                                   "NapCat", "config", "webui.json"),
+                      "r", encoding="utf-8") as f:
+                return str((_json.load(f) or {}).get("token") or "")
+        except Exception:
+            return ""
+
+    def _prompt_scan_ui(self):
+        """打开二维码图片 + 系统弹窗提示扫码（线程内可调用，防刷屏节流）"""
+        try:
+            import subprocess as _sp
+            import time as _time
+            now = _time.time()
+            if now - getattr(self, "_last_scan_prompt_ts", 0.0) < 90:
+                return
+            self._last_scan_prompt_ts = now
+            qr = os.path.join(_app_base_dir(), "NapCat.Shell.Windows.OneKey",
+                              "NapCat", "cache", "qrcode.png")
+            if os.path.exists(qr):
+                _sp.Popen(["cmd.exe", "/c", "start", "", qr],
+                          creationflags=getattr(_sp, "CREATE_NO_WINDOW", 0))
+            _sp.run(
+                ["powershell", "-NoProfile", "-Command",
+                 "Add-Type -AssemblyName System.Windows.Forms;"
+                 "[System.Windows.Forms.MessageBox]::Show("
+                 "'NapCat 登录失效，已重启并打开二维码图片，请用手机QQ扫码授权。',"
+                 "'QQ 需重新扫码')"],
+                capture_output=True, timeout=15,
+                creationflags=getattr(_sp, "CREATE_NO_WINDOW", 0))
+            print("[PCL] 已提示扫码")
+        except Exception as e:
+            print(f"[PCL] 扫码提示失败: {e}")
+
     def _kill_qq_process(self):
         """关闭 QQ AIpet 进程。
         除启动器跟踪的进程外，还兜底清理从本目录启动的所有 run_qq.py 残留实例
@@ -1330,6 +1519,7 @@ class PCLMainWindow(QWidget):
         if self._qq_process is not None:
             self._kill_process(self._qq_process)
             self._qq_process = None
+        self._set_qq_tools_visible(False)
         try:
             self._kill_stray_run_qq(_app_base_dir())
         except Exception:
@@ -1464,6 +1654,8 @@ class PCLMainWindow(QWidget):
         # 否则 run_qq 启动后按钮仍为灰色 → 用户无法点击"关闭 QQ AIpet"（历史 bug）
         self.qq_btn.setEnabled(True)
         self.qq_btn.setText("  ⏹ 关闭 QQ AIpet")
+        # QQ AIpet 已运行 → 显示 NapCat 工具按钮
+        self._set_qq_tools_visible(True)
         self.qq_btn.setStyleSheet(f"""
             QPushButton {{ background: qlineargradient(x1:0,y1:0,x2:1,y2:1,
                 stop:0 #e03030,stop:1 #f06060);
