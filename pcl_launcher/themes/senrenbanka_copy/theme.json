@@ -1,9 +1,9 @@
 {
-  "id": "senrenbanka",
-  "name": "千恋万花·樱华",
+  "id": "senrenbanka_copy",
+  "name": "沫子的日常",
   "version": "2.0.0",
-  "builtin": true,
-  "accent": "red",
+  "builtin": false,
+  "accent": "crimson",
   "desc": "仿千恋万花和风 Galgame：自定义按钮图、背景壁纸、樱花装饰与圆润卡通按钮",
   "colors": {
     "Color1": "#4a3527",
@@ -48,8 +48,8 @@
     "status": "assets/nav/status.png"
   },
   "background": {
-    "type": "image",
-    "source": "assets/bg.jpg",
+    "type": "video",
+    "source": "assets/bg_custom.mp4",
     "opacity": 1.0
   }
 }
